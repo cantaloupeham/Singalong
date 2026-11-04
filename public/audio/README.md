@@ -1,3 +1,3 @@
-# SingLoop 原创音频
+# 语你合唱原创音频
 
-请将原创英文短歌文件命名为 `keep-moving.mp3` 放在此目录。页面通过 `/audio/keep-moving.mp3` 使用 HTMLAudioElement 播放；文件缺失时会显示明确提示，不会导致页面报错。
+`keep-moving.mp3` 是用户提供的原创短歌《Take a Breath》，页面通过 `/audio/keep-moving.mp3` 使用 HTMLAudioElement 播放。原文件长 20.88 秒；歌词时间点保存在 `src/data/song.js`。

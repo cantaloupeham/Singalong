@@ -83,8 +83,8 @@ def product_shot():
 shot = product_shot()
 shot.save(OUT / "singloop-product.png", quality=96)
 
-experience = "https://stackblitz.com/github/cantaloupeham/Singalong/tree/work"
-source = "https://github.com/cantaloupeham/Singalong/tree/work"
+experience = "https://stackblitz.com/github/cantaloupeham/yuni-chorus/tree/work"
+source = "https://github.com/cantaloupeham/yuni-chorus/tree/work"
 qr_exp, qr_src = qr(experience, 190), qr(source, 150)
 
 # Vertical hackathon poster
