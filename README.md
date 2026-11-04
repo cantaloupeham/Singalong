@@ -9,7 +9,7 @@ npm install
 npm run dev
 ```
 
-应用只包含一首原创英文短歌和本地模拟数据，不需要 API Key。支持 Speech Recognition 的浏览器会在本地识别英文跟读；其他浏览器自动进入模拟反馈模式。
+应用包含一首原创英文短歌《Take a Breath》（四句、20.88 秒），不需要 API Key。支持 Speech Recognition 的浏览器会识别英文跟读；其他浏览器自动进入模拟反馈模式。
 
 ## 构建
 
@@ -23,4 +23,4 @@ npm run build
 
 在 Vercel 控制台：Add New → Project → Import Git Repository → 选择 `cantaloupeham/Singalong` → Framework Preset 选 Vite → Root Directory 保持 `./` → Build Command `npm run build` → Output Directory `dist` → Deploy。部署完成后到 Project Settings → Environments / Git，把 Production Branch 设为 `work`；若首次部署来自 `main`，切换后从 `work` 分支重新触发一次生产部署。
 
-演示版音频素材仍待加入。点击演示课的播放按钮会显示缺失提示；“导入我的歌曲”可以选择本地 MP3、WAV 或 M4A 和对应 LRC 文件，在浏览器内播放和同步歌词，文件不会上传。请勿将商业歌曲或任何 API Key 提交到仓库。未来需要 AI 接口时，应使用 Vercel 服务端函数和服务端环境变量，避免把密钥放进 `VITE_` 变量。
+演示版音频为用户提供的原创歌曲；“导入我的歌曲”可以选择本地 MP3、WAV 或 M4A 和对应 LRC 文件，在浏览器内播放和同步歌词，文件不会上传。请勿将商业歌曲或任何 API Key 提交到仓库。未来需要 AI 接口时，应使用 Vercel 服务端函数和服务端环境变量，避免把密钥放进 `VITE_` 变量。
