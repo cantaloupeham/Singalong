@@ -21,6 +21,7 @@ export function createSpeechSession(recognition, callbacks, timers = {}) {
   const schedule = timers.setTimeout || setTimeout
   const unschedule = timers.clearTimeout || clearTimeout
   let finished = false, ended = false, stopRequested = false
+  let audioStarted = false, speechDetected = false
   let finalText = '', interimText = '', timer = null
   let startTimer = schedule(() => {
     if (finished || stopRequested) return
@@ -35,17 +36,19 @@ export function createSpeechSession(recognition, callbacks, timers = {}) {
     finished = true
     clearTimer()
     if (finalText) callbacks.onFinal(finalText)
-    else if (interimText) callbacks.onError('no-final')
-    else callbacks.onError('no-speech')
+    else if (interimText || speechDetected) callbacks.onError('no-final')
+    else callbacks.onError(audioStarted ? 'no-speech' : 'no-audio')
   }
   const delayFinish = (ms) => { clearTimer(); timer = schedule(finish, ms) }
 
   recognition.onstart = () => { clearStartTimer(); if (!finished && !stopRequested) callbacks.onListening() }
-  recognition.onaudiostart = () => { clearStartTimer(); if (!finished && !stopRequested) callbacks.onListening() }
+  recognition.onaudiostart = () => { clearStartTimer(); audioStarted = true; if (!finished && !stopRequested) callbacks.onAudioStart?.() }
+  recognition.onspeechstart = () => { speechDetected = true; if (!finished && !stopRequested) callbacks.onSpeechStart?.() }
   recognition.onresult = (event) => {
     if (finished) return
     clearStartTimer()
     const result = readRecognitionResults(event)
+    if (result.finalText || result.interimText) speechDetected = true
     if (result.finalText) finalText = result.finalText
     interimText = result.interimText
     if (finalText) {
@@ -59,7 +62,8 @@ export function createSpeechSession(recognition, callbacks, timers = {}) {
     if (finalText && event?.error === 'no-speech') { finish(); return }
     finished = true
     clearTimer()
-    callbacks.onError(event?.error || 'unknown')
+    const code = event?.error || 'unknown'
+    callbacks.onError(code === 'no-speech' ? interimText || speechDetected ? 'no-final' : audioStarted ? 'no-speech' : 'no-audio' : code)
   }
   recognition.onend = () => {
     if (finished) return

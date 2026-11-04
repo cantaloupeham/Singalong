@@ -163,7 +163,7 @@ function App() {
 
   const resetSpeech = () => { speechSessionRef.current += 1; speechControllerRef.current?.cancel(); speechControllerRef.current = null; setSpeechStatus('idle'); setSpeechMessage('点击“开始跟读”，浏览器会请求麦克风权限。'); setTranscript(''); setInterimTranscript(''); setFeedback(null); setShowSimulation(false) }
 
-  const startReading = async (lineIndex = selected) => {
+  const startReading = (lineIndex = selected) => {
     const session = ++speechSessionRef.current
     const line = course.lines[lineIndex]
     if (!line) return
@@ -180,28 +180,19 @@ function App() {
       setSpeechMessage('此浏览器不支持语音识别。可查看模拟反馈示例；示例不是你的识别结果。建议使用最新版 Chrome 或 Edge。')
       return
     }
-    if (!navigator.mediaDevices?.getUserMedia) { setSpeechStatus('no-device'); setSpeechMessage('无法访问麦克风。请确认设备已连接，并在 HTTPS 页面或 localhost 打开。'); return }
-    setSpeechStatus('requesting')
-    setSpeechMessage('正在请求麦克风权限，请在浏览器弹窗中选择“允许”。')
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      stream.getTracks().forEach((track) => track.stop())
-    } catch (error) {
-      if (session !== speechSessionRef.current) return
-      const denied = ['NotAllowedError', 'PermissionDeniedError', 'SecurityError'].includes(error.name)
-      setSpeechStatus(denied ? 'denied' : error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError' ? 'no-device' : 'error')
-      setSpeechMessage(denied ? '麦克风权限被拒绝。请点地址栏的麦克风图标允许访问，再重新跟读。' : error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError' ? '未找到麦克风。请连接设备并检查系统输入设置。' : '无法使用麦克风，请检查设备是否被其他应用占用后重试。')
-      return
-    }
-    if (session !== speechSessionRef.current) return
-    const recognition = new Recognition()
+    if (!window.isSecureContext) { setSpeechStatus('error'); setSpeechMessage('请在 HTTPS 页面或 localhost 打开后使用跟读。'); return }
+    let recognition
+    try { recognition = new Recognition() }
+    catch { setSpeechStatus('error'); setSpeechMessage('无法创建浏览器语音识别器，请更新浏览器后重试。'); return }
     recognition.lang = 'en-US'
     recognition.continuous = false
     recognition.interimResults = true
     recognition.maxAlternatives = 1
     const active = () => session === speechSessionRef.current
     const controller = createSpeechSession(recognition, {
-      onListening: () => { if (active()) { setSpeechStatus('listening'); setSpeechMessage('正在识别英文跟读。读完后点击“结束跟读”。') } },
+      onListening: () => { if (active()) { setSpeechStatus('listening'); setSpeechMessage('识别器已启动，正在等待麦克风音频。') } },
+      onAudioStart: () => { if (active()) { setSpeechStatus('listening'); setSpeechMessage('麦克风音频已接入，正在识别英文跟读。读完后点击“结束跟读”。') } },
+      onSpeechStart: () => { if (active()) { setSpeechStatus('listening'); setSpeechMessage('已检测到语音，正在识别英文跟读。') } },
       onWaiting: () => { if (active()) { setSpeechStatus('processing'); setSpeechMessage('正在等待浏览器返回最终识别文字。') } },
       onInterim: (text) => { if (active()) setInterimTranscript(text) },
       onFinal: (spoken) => {
@@ -213,14 +204,19 @@ function App() {
         if (!active()) return
         setInterimTranscript('')
         const denied = code === 'not-allowed' || code === 'service-not-allowed'
-        setSpeechStatus(denied ? 'denied' : code === 'audio-capture' ? 'no-device' : code === 'no-speech' ? 'no-speech' : 'error')
-        setSpeechMessage(denied ? '语音识别权限被拒绝。请在地址栏允许麦克风后重试。' : code === 'audio-capture' ? '未检测到可用麦克风，请检查设备。' : code === 'no-speech' ? '未检测到语音。请靠近麦克风、读完一句后再结束跟读。' : code === 'no-final' ? '听到了临时识别文字，但没有收到最终结果；本次未计入练习，请重试。' : '识别服务出错或无法返回最终结果，请稍后重试。')
+        setSpeechStatus(denied ? 'denied' : code === 'audio-capture' || code === 'no-audio' ? 'no-device' : code === 'no-speech' ? 'no-speech' : 'error')
+        setSpeechMessage(denied ? '语音识别权限被拒绝。请在地址栏允许麦克风后重试。' : code === 'audio-capture' ? '识别器无法打开麦克风，请检查浏览器的输入设备设置。' : code === 'no-audio' ? '识别器已启动，但浏览器未报告接入麦克风音频。请检查输入设备后重试。' : code === 'no-speech' ? '麦克风音频已接入，但未检测到语音。请靠近麦克风、读完一句后再结束。' : code === 'no-final' ? '检测到语音或临时文字，但没有收到最终识别结果；本次未计入练习。' : code === 'network' ? '语音识别服务连接失败。请检查网络后重试。' : '识别服务出错或无法返回最终结果，请稍后重试。')
       },
     })
     speechControllerRef.current = controller
-    setSpeechStatus('requesting'); setSpeechMessage('麦克风已允许，正在启动识别服务。')
+    setSpeechStatus('requesting'); setSpeechMessage('正在请求麦克风权限并启动识别服务。')
     try { recognition.start() }
-    catch { controller.cancel(); setSpeechStatus('error'); setSpeechMessage('语音识别无法启动，请刷新页面并重试。') }
+    catch (error) {
+      controller.cancel()
+      const denied = ['NotAllowedError', 'PermissionDeniedError', 'SecurityError'].includes(error.name)
+      setSpeechStatus(denied ? 'denied' : 'error')
+      setSpeechMessage(denied ? '麦克风权限被拒绝。请在地址栏允许访问后重试。' : '语音识别无法启动，请刷新页面并重试。')
+    }
   }
 
   const submitRecording = () => {

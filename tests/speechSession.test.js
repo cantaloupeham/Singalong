@@ -17,6 +17,8 @@ const setup = () => {
   const recognition = { stop() { this.onend?.() }, abort() { this.onend?.() } }
   const session = createSpeechSession(recognition, {
     onListening: () => events.push('listening'),
+    onAudioStart: () => events.push('audio-start'),
+    onSpeechStart: () => events.push('speech-start'),
     onWaiting: () => events.push('waiting'),
     onInterim: (text) => events.push(`interim:${text}`),
     onFinal: (text) => events.push(`final:${text}`),
@@ -49,9 +51,14 @@ test('interim text is shown but only a later final text is committed, even after
 
 test('silence and interim-only endings never produce a final result', () => {
   const quiet = setup()
+  quiet.recognition.onaudiostart()
   quiet.session.stop(); quiet.timers.flush()
   assert.ok(quiet.events.includes('error:no-speech'))
+  const noAudio = setup()
+  noAudio.recognition.onstart(); noAudio.session.stop(); noAudio.timers.flush()
+  assert.ok(noAudio.events.includes('error:no-audio'))
   const partial = setup()
+  partial.recognition.onaudiostart()
   partial.recognition.onresult({ results: [result('Take a', false)] })
   partial.session.stop(); partial.timers.flush()
   assert.ok(partial.events.includes('error:no-final'))
@@ -66,6 +73,10 @@ test('service errors and cancelled old sessions do not commit late results', () 
   old.session.cancel()
   old.recognition.onresult({ results: [result('wrong line', true)] })
   assert.deepEqual(old.events, [])
+  const unrecognized = setup()
+  unrecognized.recognition.onaudiostart(); unrecognized.recognition.onspeechstart()
+  unrecognized.recognition.onerror({ error: 'no-speech' })
+  assert.ok(unrecognized.events.includes('error:no-final'))
 })
 
 test('an unresponsive recognition service leaves the startup state with an error', () => {
