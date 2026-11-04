@@ -102,6 +102,7 @@ function App() {
     if (entry.audio) {
       const pronunciationAudio = new Audio(entry.audio); wordAudioRef.current = pronunciationAudio
       pronunciationAudio.onended = () => { if (session === pronunciationSessionRef.current) setPronunciation({ word, status: 'idle' }) }
+      pronunciationAudio.onerror = () => { if (session === pronunciationSessionRef.current) { setWordNotice(`词典发音播放失败：${word}，请重试。`); setPronunciation({ word, status: 'failed' }) } }
       try { await pronunciationAudio.play(); setWordNotice(`词典发音：${word}`); return } catch { /* fall back to system voice */ }
     }
     if (!window.speechSynthesis || !window.SpeechSynthesisUtterance) { setWordNotice(`没有可播放的单词发音：${word}`); setPronunciation({ word, status: 'failed' }); return }
@@ -246,8 +247,7 @@ function App() {
         <p className="privacy-note">语音识别可能由浏览器服务处理；文字比对不评估音准。</p>
         {['unsupported', 'denied', 'no-device', 'error', 'no-speech'].includes(speechStatus) && <button className="secondary-button" onClick={() => setShowSimulation(true)}>查看模拟反馈示例</button>}
         {showSimulation && <div className="feedback"><strong>模拟反馈模式 · 示例，非你的识别结果</strong><p>示例建议：重新听当前句，留意重点词，再尝试跟读。模拟内容不计入学习进度。</p></div>}
-        {(transcript || currentRecord?.transcript) && <p className="recognized-text">最近一次识别：{transcript || currentRecord.transcript}</p>}
-        {(feedback || currentRecord?.feedback) && <div className="feedback"><strong>{(feedback || currentRecord.feedback).missing.length || (feedback || currentRecord.feedback).unexpected.length ? '已经完成一次跟读，继续练习！' : '这句的文字基本一致！'}</strong>{(feedback || currentRecord.feedback).missing.length > 0 && <p>可能漏读或不同的词：{(feedback || currentRecord.feedback).missing.map((word, index) => <mark key={`${word}-${index}`}>{word}</mark>)}</p>}{(feedback || currentRecord.feedback).unexpected.length > 0 && <p>识别结果中多出的词：{(feedback || currentRecord.feedback).unexpected.join('、')}</p>}<p>下一步：{currentRecord?.suggestion || '再读一遍当前句，或点击下一句继续练习。'}</p>{currentRecord && <small>已真实跟读 {currentRecord.count} 次 · 最近一次 {new Date(currentRecord.at).toLocaleString()}</small>}</div>}
+        {(feedback || currentRecord?.feedback) && <div className="feedback"><strong>{(feedback || currentRecord.feedback).missing.length || (feedback || currentRecord.feedback).unexpected.length ? '已经完成一次跟读，继续练习！' : '这句的文字基本一致！'}</strong><p className="recognized-text">最近一次识别：{transcript || currentRecord?.transcript}</p>{(feedback || currentRecord.feedback).missing.length > 0 && <p>可能漏读或不同的词：{(feedback || currentRecord.feedback).missing.map((word, index) => <mark key={`${word}-${index}`}>{word}</mark>)}</p>}{(feedback || currentRecord.feedback).unexpected.length > 0 && <p>识别结果中多出的词：{(feedback || currentRecord.feedback).unexpected.join('、')}</p>}<p>下一步：{currentRecord?.suggestion || '再读一遍当前句，或点击下一句继续练习。'}</p>{currentRecord && <small>已真实跟读 {currentRecord.count} 次 · 最近一次 {new Date(currentRecord.at).toLocaleString()}</small>}</div>}
       </aside>
     </section>
 
