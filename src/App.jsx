@@ -2,6 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { song } from './data/song'
 import { parseLrc } from './data/parseLrc'
 import { compareWords, lineKey, readRecords, songKey, STORAGE_KEY } from './data/practice'
+import { chooseWords, lookupWord } from './data/vocabulary'
+
+const EMPTY_LINE = { text: '请选择对应的 .lrc 歌词文件', translation: '释义待填写', words: [], startTime: 0, endTime: 4 }
 
 function App() {
   const [selected, setSelected] = useState(0)
@@ -24,6 +27,8 @@ function App() {
   const [audioHash, setAudioHash] = useState('')
   const [page, setPage] = useState('practice')
   const [wordNotice, setWordNotice] = useState('')
+  const [dictionary, setDictionary] = useState({})
+  const [pronunciation, setPronunciation] = useState({ word: '', status: 'idle' })
   const recognitionRef = useRef(null)
   const speechSessionRef = useRef(0)
   const audioRef = useRef(null)
@@ -31,11 +36,14 @@ function App() {
   const lrcInputRef = useRef(null)
   const segmentEndRef = useRef(null)
   const importSessionRef = useRef(0)
+  const wordAudioRef = useRef(null)
+  const pronunciationSessionRef = useRef(0)
   const course = mode === 'import' ? (importedSong || { title: audioName || '我的歌曲', subtitle: '请选择同步歌词', artist: '本地文件', lines: [] }) : song
-  const currentLine = course.lines[selected] || { text: '请选择对应的 .lrc 歌词文件', translation: '释义待生成/待填写', words: [{ word: '—', meaning: '重点词待填写', tip: '发音提示待填写' }], startTime: 0, endTime: 4 }
+  const currentLine = course.lines[selected] || EMPTY_LINE
   const currentSongKey = songKey(mode, audioHash, course.lines)
   const songRecords = currentSongKey ? records[currentSongKey] || {} : {}
   const currentRecord = course.lines[selected] ? songRecords[lineKey(course.lines[selected])] : null
+  const displayedFeedback = feedback || currentRecord?.feedback
   const practiced = course.lines.filter((line) => songRecords[lineKey(line)]?.count > 0).length
   const totalPractices = course.lines.reduce((sum, line) => sum + (songRecords[lineKey(line)]?.count || 0), 0)
   const progress = useMemo(() => `${practiced}/${course.lines.length} 句`, [practiced, course.lines.length])
@@ -43,6 +51,12 @@ function App() {
   useEffect(() => () => { recognitionRef.current?.stop(); audioRef.current?.pause() }, [])
   useEffect(() => () => { if (audioUrl) URL.revokeObjectURL(audioUrl) }, [audioUrl])
   useEffect(() => { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(records)) } catch { /* session still works */ } }, [records])
+  useEffect(() => {
+    let active = true
+    setDictionary({})
+    for (const item of currentLine.words) lookupWord(item.word).then((result) => { if (active) setDictionary((previous) => ({ ...previous, [item.word]: result })) })
+    return () => { active = false }
+  }, [currentLine])
 
   const handleTimeUpdate = () => {
     const time = audioRef.current?.currentTime || 0
@@ -61,6 +75,7 @@ function App() {
     if (!audio) return
     if (mode === 'import' && !audioUrl) { setAudioNotice('请先选择本地音频文件。'); return }
     window.speechSynthesis?.cancel()
+    wordAudioRef.current?.pause()
     try { await audio.play(); setIsPlaying(true); setAudioNotice('') }
     catch { setIsPlaying(false); setAudioNotice(mode === 'import' ? '音频加载失败。请重新选择有效的 MP3、WAV 或 M4A 文件。' : '音频素材待加入。跟读练习仍可使用。') }
   }
@@ -77,15 +92,25 @@ function App() {
     catch { segmentEndRef.current = null }
   }
 
-  const speakWord = (word) => {
+  const speakWord = async (word) => {
+    const session = ++pronunciationSessionRef.current
     audioRef.current?.pause(); setIsPlaying(false); segmentEndRef.current = null
-    if (!window.speechSynthesis || !window.SpeechSynthesisUtterance) { setWordNotice('此浏览器不支持单词合成朗读。'); return }
+    wordAudioRef.current?.pause(); window.speechSynthesis?.cancel()
+    setPronunciation({ word, status: 'playing' })
+    const entry = dictionary[word] || await lookupWord(word)
+    if (session !== pronunciationSessionRef.current) return
+    if (entry.audio) {
+      const pronunciationAudio = new Audio(entry.audio); wordAudioRef.current = pronunciationAudio
+      pronunciationAudio.onended = () => { if (session === pronunciationSessionRef.current) setPronunciation({ word, status: 'idle' }) }
+      try { await pronunciationAudio.play(); setWordNotice(`词典发音：${word}`); return } catch { /* fall back to system voice */ }
+    }
+    if (!window.speechSynthesis || !window.SpeechSynthesisUtterance) { setWordNotice(`没有可播放的单词发音：${word}`); setPronunciation({ word, status: 'failed' }); return }
     const voice = window.speechSynthesis.getVoices().find((item) => item.lang.toLowerCase().startsWith('en-us'))
-    if (!voice) { setWordNotice('没有可用的 en-US 英语语音，请检查系统语音包。'); return }
-    window.speechSynthesis.cancel()
+    if (!voice) { setWordNotice(`没有可用的词典音频或 en-US 系统语音：${word}`); setPronunciation({ word, status: 'failed' }); return }
     const utterance = new SpeechSynthesisUtterance(word); utterance.lang = 'en-US'; utterance.voice = voice
-    utterance.onerror = () => setWordNotice('单词合成朗读失败，请稍后重试。')
-    setWordNotice(`正在播放合成朗读：${word}（非歌手原音）`)
+    utterance.onerror = () => { if (session === pronunciationSessionRef.current) { setWordNotice(`合成朗读失败：${word}`); setPronunciation({ word, status: 'failed' }) } }
+    utterance.onend = () => { if (session === pronunciationSessionRef.current) setPronunciation({ word, status: 'idle' }) }
+    setWordNotice(`浏览器合成朗读：${word}`)
     window.speechSynthesis.speak(utterance)
   }
 
@@ -94,7 +119,7 @@ function App() {
     audioRef.current.currentTime = 0; segmentEndRef.current = null; setProgressTime(0); setSelected(0); setLoopLine(false); setAudioNotice(''); playAudio()
   }
 
-  const handleAudioEnded = () => { if (mode === 'import' && loopLine && course.lines[selected]) { audioRef.current.currentTime = course.lines[selected].startTime; playAudio(); return } audioRef.current.currentTime = 0; setIsPlaying(false); setProgressTime(0); setSelected(0); setFeedback(null); setTranscript(''); setAudioNotice('播放完成，可以继续练习任意句子。') }
+  const handleAudioEnded = () => { if (mode === 'import' && loopLine && course.lines[selected]) { audioRef.current.currentTime = course.lines[selected].startTime; playAudio(); return } audioRef.current.currentTime = 0; setIsPlaying(false); setProgressTime(0); setSelected(0); setAudioNotice('播放完成。') }
 
   const handleAudioError = () => { setIsPlaying(false); setAudioNotice(mode === 'import' ? '音频加载失败。请重新选择有效的 MP3、WAV 或 M4A 文件。' : '音频素材待加入。跟读练习仍可使用。') }
 
@@ -169,7 +194,7 @@ function App() {
     recognitionRef.current?.stop()
   }
 
-  const selectLine = (index) => { resetSpeech(); setSelected(index); if (mode === 'import' && audioRef.current && Number.isFinite(course.lines[index].startTime)) { audioRef.current.currentTime = course.lines[index].startTime; setProgressTime(course.lines[index].startTime); setLoopLine(true) } }
+  const selectLine = (index) => { resetSpeech(); setWordNotice(''); setSelected(index); if (mode === 'import' && audioRef.current && Number.isFinite(course.lines[index].startTime)) { audioRef.current.currentTime = course.lines[index].startTime; setProgressTime(course.lines[index].startTime); setLoopLine(true) } }
 
   const chooseAudio = async (event) => {
     const file = event.target.files?.[0]; event.target.value = ''; if (!file) return
@@ -185,45 +210,50 @@ function App() {
     try {
       const content = await file.text()
       if (!content.trim()) { setImportError('歌词文件为空，请选择包含时间戳的 .lrc 文件。'); return }
-      const lines = parseLrc(content)
+      const lines = parseLrc(content).map((line) => ({ ...line, translation: '释义待填写', words: chooseWords(line.text) }))
       if (!lines.length) { setImportError('未找到有效的时间戳歌词，例如 [00:04.00] Every small step counts today'); return }
       resetSpeech(); setImportedSong({ title: audioName.replace(/\.[^.]+$/, ''), artist: '我的本地歌曲', subtitle: '本地 LRC 歌词', lines }); setLrcName(file.name); setSelected(0); setLoopLine(false); setImportError(''); setAudioNotice('LRC 歌词已加载，可以开始播放。')
     } catch { setImportError('歌词文件读取失败，请重新选择 .lrc 文件。') }
   }
   const resetImport = () => { importSessionRef.current += 1; resetSpeech(); audioRef.current?.pause(); setIsPlaying(false); setAudioUrl(''); setAudioName(''); setAudioHash(''); setLrcName(''); setImportedSong(null); setMode('demo'); setImportError(''); setSelected(0); setLoopLine(false); setAudioNotice('') }
+  const clearCurrentRecords = () => { if (!currentSongKey || !window.confirm('清除这首歌的练习记录？')) return; setRecords((previous) => { const next = { ...previous }; delete next[currentSongKey]; return next }); setFeedback(null); setTranscript('') }
 
   return <main className="app">
-    <header className="topbar"><div className="logo">Sing<span>Loop</span></div><nav><button className={page === 'practice' ? 'active' : ''} onClick={() => setPage('practice')}>练习</button><button className={page === 'progress' ? 'active' : ''} onClick={() => { audioRef.current?.pause(); setIsPlaying(false); segmentEndRef.current = null; setPage('progress') }}>学习进度</button></nav><div className="language">English <span>⌄</span></div></header>
+    <header className="topbar"><div className="logo">语你合唱</div><nav><button className={page === 'practice' ? 'active' : ''} onClick={() => setPage('practice')}>练习</button><button className={page === 'progress' ? 'active' : ''} onClick={() => { audioRef.current?.pause(); setIsPlaying(false); segmentEndRef.current = null; setPage('progress') }}>学习进度</button></nav><div className="language">English</div></header>
 
     <audio ref={audioRef} src={mode === 'import' ? audioUrl || undefined : '/audio/keep-moving.mp3'} preload="metadata" onTimeUpdate={handleTimeUpdate} onEnded={handleAudioEnded} onError={handleAudioError} />
 
     {page === 'practice' ? <>
-    <section className="intro"><p className="kicker">ENGLISH SONG PRACTICE · 01</p><h1>跟着一首歌，<span>练好一句英语。</span></h1><p className="intro-copy">SingLoop 是你的英语歌曲陪练搭子。先听、再跟读，慢慢把每一句唱成自己的表达。</p></section>
+    <section className="intro"><p className="kicker">听歌 · 看懂 · 跟读 · 复习</p><h1>语你合唱</h1><p className="intro-copy">听懂喜欢的歌，跟着伙伴练会一句外语</p></section>
 
     <section className="song-picker"><div><p className="label">当前歌曲</p><h2>{course.title}</h2><p className="muted">{course.subtitle} · {course.artist}</p></div><div className="song-status"><span className="status-dot" />{mode === 'import' ? '我的歌曲 · 本地模式' : '原创演示课程'}<br /><small>{mode === 'import' ? '刷新后需要重新选择文件' : '原创音频 · 约 21 秒'}</small></div></section>
-    <section className="import-panel"><div><p className="label">IMPORT MY SONG</p><strong>导入我的歌曲</strong><p className="muted">音频只在本机播放，不上传服务器；轻量跟读记录保存在本机。刷新后需重新选择文件。</p>{mode === 'import' && <p className="muted">音频：{audioName || '未选择'} · 歌词：{lrcName || '未选择'}</p>}</div><div className="import-actions"><button className="secondary-button" onClick={() => audioInputRef.current?.click()}>选择音频</button><button className="secondary-button" onClick={() => lrcInputRef.current?.click()} disabled={!audioUrl}>选择 .lrc</button><button className="text-button" onClick={resetImport}>返回演示课程</button><input ref={audioInputRef} type="file" accept=".mp3,.wav,.m4a,audio/mpeg,audio/wav,audio/mp4" onChange={chooseAudio} hidden /><input ref={lrcInputRef} type="file" accept=".lrc,text/plain" onChange={chooseLrc} hidden /></div>{importError && <p className="import-error" role="alert">{importError}</p>}</section>
+    <section className="import-panel"><div><strong>导入我的歌曲</strong><p className="muted">选择本地音频与 LRC；刷新后需重新选择文件。</p>{mode === 'import' && <p className="muted">音频：{audioName || '未选择'} · 歌词：{lrcName || '未选择'}</p>}</div><div className="import-actions"><button className="secondary-button" onClick={() => audioInputRef.current?.click()}>选择音频</button><button className="secondary-button" onClick={() => lrcInputRef.current?.click()} disabled={!audioUrl}>选择 .lrc</button><button className="text-button" onClick={resetImport}>返回演示课程</button><input ref={audioInputRef} type="file" accept=".mp3,.wav,.m4a,audio/mpeg,audio/wav,audio/mp4" onChange={chooseAudio} hidden /><input ref={lrcInputRef} type="file" accept=".lrc,text/plain" onChange={chooseLrc} hidden /></div>{importError && <p className="import-error" role="alert">{importError}</p>}</section>
 
     <section className="workspace">
-      <div className="lyrics-panel"><div className="panel-heading"><div><p className="label">LYRICS</p><h2>逐句练习</h2></div><span className="progress-pill">已练习 {progress}</span></div><div className="lyrics-list">{course.lines.map((line, index) => <div key={line.id} className={`lyric-row ${index === selected ? 'selected' : ''} ${songRecords[lineKey(line)] ? 'practiced' : 'unpracticed'}`}><button className="lyric-line" onClick={() => selectLine(index)}><span className="line-number">{String(line.id).padStart(2, '0')}</span><span>{line.text}</span></button><span className="line-practice-status">{songRecords[lineKey(line)] ? `✓ 练过 ${songRecords[lineKey(line)].count} 次` : '○ 未练习'}</span><div className="line-actions"><button onClick={(event) => { event.stopPropagation(); listenLine(index) }}>▶ 听这一句</button><button onClick={(event) => { event.stopPropagation(); selectLine(index); startReading(index) }} disabled={!currentSongKey}>🎙 跟读</button></div></div>)}</div><div className="audio-controls"><button className="secondary-button" onClick={restartAudio}>↺ <span>重新开始</span></button><button className="primary-button" onClick={toggleAudio}>{isPlaying ? 'Ⅱ' : '▶'} <span>{isPlaying ? '暂停' : '播放整首'}</span></button><button className="secondary-button" onClick={() => setLoopLine((value) => !value)}>{loopLine ? '取消循环' : '循环本句'}</button></div>{audioNotice && <p className="audio-notice">{audioNotice}</p>}<div className="audio-time">{Math.floor(progressTime)}s / {mode === 'import' ? '本地音频' : `${song.lines.at(-1).endTime}s`}</div></div>
+      <div className="lyrics-panel">
+        <div className="panel-heading"><div><p className="label">LYRICS</p><h2>逐句练习</h2></div><span className="progress-pill">已练习 {progress}</span></div>
+        <div className="audio-controls audio-controls-top"><button className="primary-button" onClick={toggleAudio}>{isPlaying ? 'Ⅱ 暂停' : '▶ 播放整首'}</button><button className="secondary-button" onClick={restartAudio}>↺ 重新开始</button>{mode === 'import' && <button className="secondary-button" onClick={() => setLoopLine((value) => !value)}>{loopLine ? '取消循环' : '循环本句'}</button>}</div>
+        {audioNotice && <p className="audio-notice">{audioNotice}</p>}<div className="audio-time">{Math.floor(progressTime)}s / {mode === 'import' ? '本地音频' : `${song.lines.at(-1).endTime}s`}</div>
+        <div className="lyrics-list">{course.lines.map((line, index) => <div key={line.id} className={`lyric-row ${index === selected ? 'selected' : ''} ${songRecords[lineKey(line)] ? 'practiced' : 'unpracticed'}`}><button className="lyric-line" onClick={() => selectLine(index)}><span className="line-number">{String(line.id).padStart(2, '0')}</span><span>{line.text}</span></button><span className="line-practice-status">{songRecords[lineKey(line)] ? `✓ 练过 ${songRecords[lineKey(line)].count} 次` : '○ 未练习'}</span><div className="line-actions"><button onClick={(event) => { event.stopPropagation(); listenLine(index) }}>▶ 听这一句</button><button onClick={(event) => { event.stopPropagation(); selectLine(index); startReading(index) }} disabled={!currentSongKey}>🎙 跟读</button></div></div>)}</div>
+      </div>
 
       <aside className="practice-panel">
         <div className="panel-heading"><div><p className="label">YOUR TURN</p><h2>跟读这一句</h2></div><span className="line-count">{course.lines.length ? selected + 1 : 0} / {course.lines.length}</span></div>
-        <div className="focus-line"><p>{currentLine.text}</p><span>{currentLine.translation}</span></div>
-        <div className="word-comparison" aria-label="逐词识别比对">{(feedback || currentRecord?.feedback)?.parts?.map((part, index) => part.status === 'punctuation' ? <span key={index}>{part.text}</span> : <button key={index} type="button" className={`word-token ${part.status}`} onClick={() => speakWord(part.text)} title="听单词合成朗读">{part.status === 'matched' ? '✓ ' : '△ '}{part.text}<small>{part.status === 'matched' ? '识别匹配' : '可能漏读或不一致'}</small></button>) || (currentLine.text.match(/[A-Za-z]+|[^A-Za-z]+/g) || []).map((part, index) => /^[A-Za-z]+$/.test(part) ? <button key={index} type="button" className="word-token unjudged" onClick={() => speakWord(part)} title="听单词合成朗读">○ {part}<small>未判断</small></button> : <span key={index}>{part}</span>)}</div><p className="word-caption">点击单词可听 en-US 合成朗读（非原唱）。识别结果可能有误。</p>{wordNotice && <p className="speech-status" role="status">{wordNotice}</p>}
-        <div className="detail-card"><p className="label">重点词与发音</p>{currentLine.words.length ? currentLine.words.map((item) => <div className="word-row" key={item.word}><strong>{item.word}</strong><span>{item.meaning}</span><small>{item.tip}</small></div>) : <p className="muted">重点词与发音提示待填写</p>}</div>
+        <div className="focus-line"><p>{(displayedFeedback?.parts || (currentLine.text.match(/[A-Za-z]+|[^A-Za-z]+/g) || []).map((text) => ({ text, status: /^[A-Za-z]+$/.test(text) ? 'unjudged' : 'punctuation' }))).map((part, index) => part.status === 'punctuation' ? <span key={index}>{part.text}</span> : <button key={index} className={`inline-word ${part.status}`} onClick={() => speakWord(part.text)} title={`听 ${part.text} 的标准朗读`}>{part.status === 'matched' ? '✓ ' : part.status === 'different' ? '△ ' : ''}{part.text}</button>)}</p><span>{currentLine.translation}</span><small className="inline-legend">{displayedFeedback ? '✓ 识别匹配　△ 疑似漏读或不一致' : '点击英文单词可听标准朗读'} · 识别结果可能有误</small></div>
+        <div className="detail-card"><p className="label">重点词与发音</p>{currentLine.words.length ? currentLine.words.map((item) => { const entry = dictionary[item.word]; return <div className="word-row" key={item.word}><strong>{item.word}</strong><span>{item.generated ? entry?.definition ? `英文释义：${entry.definition}` : entry?.status === 'missing' ? '词典无结果' : entry?.status === 'error' ? '词典暂不可用' : '词义待查' : item.meaning}</span><small>{entry?.phonetic || item.tip}</small><button className="pronounce-button" onClick={() => speakWord(item.word)}>{pronunciation.word === item.word && pronunciation.status === 'playing' ? '播放中…' : pronunciation.word === item.word && pronunciation.status === 'failed' ? '重试发音' : '▶ 听发音'}</button></div> }) : <p className="muted">重点词待查</p>}</div>{wordNotice && <p className="speech-status" role="status">{wordNotice}</p>}
         <div className="record-actions"><button className={`listen-button ${speechStatus === 'listening' ? 'listening' : ''}`} onClick={startReading} disabled={!course.lines.length || ['requesting', 'listening', 'processing'].includes(speechStatus)}>🎙 {speechStatus === 'requesting' ? '等待麦克风权限' : speechStatus === 'listening' ? '正在识别…' : '开始跟读'}</button><button className="submit-button" onClick={submitRecording} disabled={speechStatus !== 'listening'}>结束跟读</button></div>
         <p className="speech-status" role="status">{speechMessage}</p>
-        <p className="privacy-note">不保存录音；语音识别可能由浏览器服务处理。文字比对不评估音准或发音质量。</p>
+        <p className="privacy-note">语音识别可能由浏览器服务处理；文字比对不评估音准。</p>
         {['unsupported', 'denied', 'no-device', 'error', 'no-speech'].includes(speechStatus) && <button className="secondary-button" onClick={() => setShowSimulation(true)}>查看模拟反馈示例</button>}
         {showSimulation && <div className="feedback"><strong>模拟反馈模式 · 示例，非你的识别结果</strong><p>示例建议：重新听当前句，留意重点词，再尝试跟读。模拟内容不计入学习进度。</p></div>}
-        {(transcript || currentRecord?.transcript) && <p className="recognized-text">最近一次真实识别文字：{transcript || currentRecord.transcript}</p>}
+        {(transcript || currentRecord?.transcript) && <p className="recognized-text">最近一次识别：{transcript || currentRecord.transcript}</p>}
         {(feedback || currentRecord?.feedback) && <div className="feedback"><strong>{(feedback || currentRecord.feedback).missing.length || (feedback || currentRecord.feedback).unexpected.length ? '已经完成一次跟读，继续练习！' : '这句的文字基本一致！'}</strong>{(feedback || currentRecord.feedback).missing.length > 0 && <p>可能漏读或不同的词：{(feedback || currentRecord.feedback).missing.map((word, index) => <mark key={`${word}-${index}`}>{word}</mark>)}</p>}{(feedback || currentRecord.feedback).unexpected.length > 0 && <p>识别结果中多出的词：{(feedback || currentRecord.feedback).unexpected.join('、')}</p>}<p>下一步：{currentRecord?.suggestion || '再读一遍当前句，或点击下一句继续练习。'}</p>{currentRecord && <small>已真实跟读 {currentRecord.count} 次 · 最近一次 {new Date(currentRecord.at).toLocaleString()}</small>}</div>}
       </aside>
     </section>
 
-    <section className="progress-card"><div className="progress-icon">↗</div><div><p className="label">学习进度</p><h3>已练习的不同句数 {progress} · 累计真实跟读 {totalPractices} 次</h3><p className="muted">再次练同一句会增加跟读次数，不会增加已练习句数。</p></div><div className="progress-track"><span style={{ width: `${course.lines.length ? (practiced / course.lines.length) * 100 : 0}%` }} /></div></section>
-    </> : <section className="progress-page"><button className="secondary-button" onClick={() => setPage('practice')}>← 返回练习</button><h1>{course.title} · 学习进度</h1><div className="progress-numbers"><div><strong>{practiced}/{course.lines.length}</strong><span>已练习的不同句数</span></div><div><strong>{totalPractices}</strong><span>累计真实跟读次数</span></div></div>{mode === 'import' && <p className="muted">导入文件刷新后需重新选择相同音频与 LRC，记录才会重新关联。</p>}{course.lines.map((line, index) => { const record = songRecords[lineKey(line)]; return <button className={`progress-line ${index === selected ? 'selected' : ''} ${record ? 'practiced' : ''}`} key={line.id} onClick={() => { selectLine(index); setPage('practice') }}><span>{line.text}</span><small>{record ? `✓ 已练习 ${record.count} 次 · ${new Date(record.at).toLocaleString()}` : '○ 未练习'}</small></button> })}</section>}
-    <footer>SingLoop · 持续陪练，慢慢唱成自己的英语</footer>
+    <section className="progress-card"><div className="progress-icon">↗</div><div><p className="label">学习进度</p><h3>{progress} · 跟读 {totalPractices} 次</h3></div><div className="progress-track"><span style={{ width: `${course.lines.length ? (practiced / course.lines.length) * 100 : 0}%` }} /></div></section>
+    </> : <section className="progress-page"><button className="secondary-button" onClick={() => setPage('practice')}>← 返回练习</button><h1>语你合唱 · {course.title} 学习进度</h1><div className="progress-numbers"><div><strong>{practiced}/{course.lines.length}</strong><span>练习过的不同句数</span></div><div><strong>{totalPractices}</strong><span>累计真实跟读次数</span></div></div>{mode === 'import' && <p className="muted">刷新后需重新选择同一首音频和 LRC，才能查看记录。</p>}{course.lines.map((line, index) => { const record = songRecords[lineKey(line)]; return <button className={`progress-line ${index === selected ? 'selected' : ''} ${record ? 'practiced' : ''}`} key={line.id} onClick={() => { selectLine(index); setPage('practice') }}><span>{line.text}</span><small>{record ? `✓ 已练习 ${record.count} 次 · ${new Date(record.at).toLocaleString()}` : '○ 未练习'}</small></button> })}<button className="clear-records" onClick={clearCurrentRecords} disabled={!totalPractices}>清除这首歌的练习记录</button></section>}
+    <footer>语你合唱 · 听懂喜欢的歌，跟着伙伴练会一句外语</footer>
   </main>
 }
 

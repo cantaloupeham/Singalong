@@ -15,6 +15,6 @@ export function parseLrc(source) {
   return cues.map((cue, index) => ({
     id: index + 1, ...cue,
     endTime: cues[index + 1]?.startTime ?? Infinity,
-    translation: '释义待生成/待填写', words: [],
+    translation: '释义待填写', words: [],
   }))
 }

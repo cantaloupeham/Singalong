@@ -2,7 +2,7 @@ export const song = {
   id: 'keep-moving',
   title: 'Take a Breath',
   subtitle: '一首写给练习路上的原创短歌',
-  artist: 'SingLoop Originals',
+  artist: '语你合唱原创',
   lines: [
     { id: 1, startTime: 0, endTime: 4.5, text: 'Take a breath and start again', translation: '深呼吸，然后重新开始', words: [{ word: 'breath', meaning: '呼吸', tip: '像“breth”，注意 th 的气流' }, { word: 'again', meaning: '再次', tip: '重音在第二音节 a-GAIN' }] },
     { id: 2, startTime: 4.5, endTime: 10.75, text: 'Every small step counts today', translation: '今天的每一小步都算数', words: [{ word: 'small step', meaning: '小步子', tip: '连读：small_step' }, { word: 'counts', meaning: '重要、有价值', tip: '结尾 s 要发音' }] },
