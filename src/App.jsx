@@ -6,6 +6,7 @@ import { chooseWords, lookupWord } from './data/vocabulary'
 import { deleteSavedSong, getSavedSong, listSavedSongs, saveSong } from './data/songLibrary'
 import { recommendLine } from './data/review'
 import { createSpeechSession } from './data/speechSession'
+import MicrophoneCheck from './MicrophoneCheck'
 
 const EMPTY_LINE = { text: '请选择对应的 .lrc 歌词文件', translation: '释义待填写', words: [], startTime: 0, endTime: 4 }
 const MicIcon = () => <svg className="mic-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="9" y="2.5" width="6" height="12" rx="3" /><path d="M5.5 10.5a6.5 6.5 0 0 0 13 0M12 17v4m-4 0h8" /></svg>
@@ -297,6 +298,7 @@ function App() {
         {interimTranscript && ['listening', 'processing'].includes(speechStatus) && <p className="speech-status" role="status">识别中（临时文字，不计入练习）：{interimTranscript}</p>}
         <div className="detail-card"><p className="label">重点词与发音</p>{currentLine.words.length ? currentLine.words.map((item) => { const entry = dictionary[item.word]; return <div className="word-row" key={item.word}><strong>{item.word}</strong><span>{item.generated ? entry?.definition ? `英文释义：${entry.definition}` : entry?.status === 'missing' ? '词典无结果' : entry?.status === 'error' ? '词典暂不可用' : '词义待查' : item.meaning}</span><small>{entry?.phonetic || item.tip}</small><button className="pronounce-button" onClick={() => speakWord(item.word)}>{pronunciation.word === item.word && pronunciation.status === 'playing' ? '播放中…' : pronunciation.word === item.word && pronunciation.status === 'failed' ? '重试发音' : '▶ 听发音'}</button></div> }) : <p className="muted">重点词待查</p>}</div>{wordNotice && <p className="speech-status" role="status">{wordNotice}</p>}
         <p className="speech-status" role="status">{speechMessage}</p>
+        {['no-speech', 'no-device', 'error'].includes(speechStatus) && <MicrophoneCheck />}
         <p className="privacy-note">语音识别可能由浏览器服务处理；文字比对不评估音准。</p>
         {['unsupported', 'denied', 'no-device', 'error', 'no-speech'].includes(speechStatus) && <button className="secondary-button" onClick={() => setShowSimulation(true)}>查看模拟反馈示例</button>}
         {showSimulation && <div className="feedback"><strong>模拟反馈模式 · 示例，非你的识别结果</strong><p>示例建议：重新听当前句，留意重点词，再尝试跟读。模拟内容不计入学习进度。</p></div>}
