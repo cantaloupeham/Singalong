@@ -17,6 +17,7 @@ function App() {
   const [selected, setSelected] = useState(0)
   const [speechStatus, setSpeechStatus] = useState('idle')
   const [speechMessage, setSpeechMessage] = useState('点击“开始跟读”，浏览器会请求麦克风权限。')
+  const [dismissedSpeechToast, setDismissedSpeechToast] = useState(false)
   const [showSimulation, setShowSimulation] = useState(false)
   const [transcript, setTranscript] = useState('')
   const [interimTranscript, setInterimTranscript] = useState('')
@@ -60,8 +61,11 @@ function App() {
   const recommendation = recommendLine(course.lines, songRecords)
   const report = buildLearningReport(course.title, course.lines, songRecords)
   const progress = useMemo(() => `${practiced}/${course.lines.length} 句`, [practiced, course.lines.length])
+  const permissionNotice = ['requesting', 'denied', 'no-device'].includes(speechStatus)
+  const showPermissionToast = permissionNotice && !dismissedSpeechToast
 
   useEffect(() => () => { speechControllerRef.current?.cancel(); audioRef.current?.pause() }, [])
+  useEffect(() => { setDismissedSpeechToast(false) }, [speechStatus])
   useEffect(() => () => { if (audioUrl) URL.revokeObjectURL(audioUrl) }, [audioUrl])
   useEffect(() => { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(records)) } catch { /* session still works */ } }, [records])
   useEffect(() => {
@@ -281,6 +285,7 @@ function App() {
 
   return <main className="app">
     <header className="topbar"><div className="logo">语你合唱</div><nav><button className={page === 'practice' ? 'active' : ''} onClick={() => setPage('practice')}>练习</button><button className={page === 'progress' ? 'active' : ''} onClick={() => { audioRef.current?.pause(); setIsPlaying(false); segmentEndRef.current = null; setPage('progress') }}>学习进度</button></nav><div className="language">English</div></header>
+    {showPermissionToast && <div className={`speech-toast ${speechStatus === 'requesting' ? 'pending' : 'error'}`} role={speechStatus === 'requesting' ? 'status' : 'alert'}><span className="speech-toast-symbol" aria-hidden="true">{speechStatus === 'requesting' ? '…' : '!'}</span><p>{speechMessage}</p><button type="button" aria-label="关闭麦克风提示" onClick={() => setDismissedSpeechToast(true)}>×</button></div>}
 
     <audio ref={audioRef} src={mode === 'import' ? audioUrl || undefined : '/audio/keep-moving.mp3'} preload="metadata" onTimeUpdate={handleTimeUpdate} onEnded={handleAudioEnded} onError={handleAudioError} />
 
@@ -304,7 +309,7 @@ function App() {
         <div className="record-actions"><button className={`listen-button ${speechStatus === 'listening' ? 'listening' : ''}`} onClick={() => startReading(selected)} disabled={!currentSongKey || !course.lines.length || ['requesting', 'listening', 'processing'].includes(speechStatus)}><MicIcon />{speechStatus === 'requesting' ? '请求权限或启动中…' : speechStatus === 'listening' ? '正在识别…' : speechStatus === 'processing' ? '等待最终结果…' : '开始跟读'}</button><button className="submit-button" onClick={submitRecording} disabled={speechStatus !== 'listening'}>结束跟读</button></div>
         {interimTranscript && ['listening', 'processing'].includes(speechStatus) && <p className="speech-status" role="status">识别中（临时文字，不计入练习）：{interimTranscript}</p>}
         <div className="detail-card"><p className="label">重点词与发音</p>{currentLine.words.length ? currentLine.words.map((item) => { const entry = dictionary[item.word]; return <div className="word-row" key={item.word}><strong>{item.word}</strong><span>{item.generated ? entry?.definition ? `英文释义：${entry.definition}` : entry?.status === 'missing' ? '词典无结果' : entry?.status === 'error' ? '词典暂不可用' : '词义待查' : item.meaning}</span><small>{entry?.phonetic || item.tip}</small><button className="pronounce-button" onClick={() => speakWord(item.word)}>{pronunciation.word === item.word && pronunciation.status === 'playing' ? '播放中…' : pronunciation.word === item.word && pronunciation.status === 'failed' ? '重试发音' : '▶ 听发音'}</button></div> }) : <p className="muted">重点词待查</p>}</div>{wordNotice && <p className="speech-status" role="status">{wordNotice}</p>}
-        <p className="speech-status" role="status">{speechMessage}</p>
+        {!showPermissionToast && <p className="speech-status" role="status">{speechMessage}</p>}
         {['no-speech', 'no-device', 'error'].includes(speechStatus) && <MicrophoneCheck />}
         <p className="privacy-note">语音识别可能由浏览器服务处理；文字比对不评估音准。</p>
         {['unsupported', 'denied', 'no-device', 'error', 'no-speech'].includes(speechStatus) && <button className="secondary-button" onClick={() => setShowSimulation(true)}>查看模拟反馈示例</button>}
