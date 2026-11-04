@@ -7,6 +7,8 @@ import { deleteSavedSong, getSavedSong, listSavedSongs, saveSong } from './data/
 import { recommendLine } from './data/review'
 import { createSpeechSession } from './data/speechSession'
 import MicrophoneCheck from './MicrophoneCheck'
+import ReportPage from './ReportPage'
+import { buildLearningReport } from './data/report'
 
 const EMPTY_LINE = { text: '请选择对应的 .lrc 歌词文件', translation: '释义待填写', words: [], startTime: 0, endTime: 4 }
 const MicIcon = () => <svg className="mic-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="9" y="2.5" width="6" height="12" rx="3" /><path d="M5.5 10.5a6.5 6.5 0 0 0 13 0M12 17v4m-4 0h8" /></svg>
@@ -56,6 +58,7 @@ function App() {
   const practiced = course.lines.filter((line) => songRecords[lineKey(line)]?.count > 0).length
   const totalPractices = course.lines.reduce((sum, line) => sum + (songRecords[lineKey(line)]?.count || 0), 0)
   const recommendation = recommendLine(course.lines, songRecords)
+  const report = buildLearningReport(course.title, course.lines, songRecords)
   const progress = useMemo(() => `${practiced}/${course.lines.length} 句`, [practiced, course.lines.length])
 
   useEffect(() => () => { speechControllerRef.current?.cancel(); audioRef.current?.pause() }, [])
@@ -271,6 +274,10 @@ function App() {
     } catch { setLibraryNotice('删除失败，请检查浏览器站点存储后重试。') }
   }
   const clearCurrentRecords = () => { if (!currentSongKey || !window.confirm('清除这首歌的练习记录？')) return; setRecords((previous) => { const next = { ...previous }; delete next[currentSongKey]; return next }); setFeedback(null); setTranscript('') }
+  const openReportLine = (index) => { selectLine(index); setPage('practice') }
+  const listenReportLine = (index) => { setPage('practice'); listenLine(index) }
+  const listenReportWord = (index, word) => { if (!word) return; selectLine(index); setPage('practice'); speakWord(word) }
+  const readReportLine = (index) => { selectLine(index); setPage('practice'); startReading(index) }
 
   return <main className="app">
     <header className="topbar"><div className="logo">语你合唱</div><nav><button className={page === 'practice' ? 'active' : ''} onClick={() => setPage('practice')}>练习</button><button className={page === 'progress' ? 'active' : ''} onClick={() => { audioRef.current?.pause(); setIsPlaying(false); segmentEndRef.current = null; setPage('progress') }}>学习进度</button></nav><div className="language">English</div></header>
@@ -307,14 +314,14 @@ function App() {
     </section>
 
     <section className="progress-card"><div className="progress-icon">↗</div><div><p className="label">学习进度</p><h3>{progress} · 跟读 {totalPractices} 次</h3></div><div className="progress-track"><span style={{ width: `${course.lines.length ? (practiced / course.lines.length) * 100 : 0}%` }} /></div></section>
-    </> : <section className="progress-page">
-      <button className="secondary-button" onClick={() => setPage('practice')}>← 返回练习</button>
+    </> : page === 'progress' ? <section className="progress-page">
+      <div className="progress-toolbar"><button className="secondary-button" onClick={() => setPage('practice')}>← 返回练习</button><button className="primary-button" onClick={() => setPage('report')}>生成我的学习报告</button></div>
       <div className="saved-library"><h2>我的歌曲</h2><p className="muted">歌曲仅保存在此设备的浏览器中。</p>{libraryNotice && <p className="muted" role="status">{libraryNotice}</p>}{savedSongs.length ? savedSongs.map((item) => { const entries = records[item.key] || {}; const done = item.lines.filter((line) => entries[lineKey(line)]?.count > 0).length; const attempts = item.lines.reduce((sum, line) => sum + (entries[lineKey(line)]?.count || 0), 0); const recent = Object.values(entries).map((record) => record.at).filter(Boolean).sort().at(-1); return <div className="saved-song" key={item.key}><div><strong>{item.name}</strong><small>{done}/{item.lines.length} 句 · 累计跟读 {attempts} 次 · 最近练习 {recent ? new Date(recent).toLocaleString() : '尚未练习'}</small><div className="saved-song-bar"><span style={{ width: `${item.lines.length ? done / item.lines.length * 100 : 0}%` }} /></div></div><div className="saved-song-actions"><button onClick={() => openSavedSong(item.key)}>继续学习</button><button onClick={() => removeSavedSong(item.key)}>删除这首歌</button></div></div> }) : <p className="empty-library">还没有保存的歌曲。可以在练习页导入本地音频和 LRC。</p>}</div>
       <h1>{course.title} · 学习进度</h1><div className="progress-numbers"><div><strong>{practiced}/{course.lines.length}</strong><span>练习过的不同句数</span></div><div><strong>{totalPractices}</strong><span>累计真实跟读次数</span></div></div>
       {recommendation && <div className="review-suggestion"><strong>建议下一句：{course.lines[recommendation.index].text}</strong><p>{recommendation.reason}</p><button onClick={() => { selectLine(recommendation.index); setPage('practice') }}>去练这一句</button></div>}
       {course.lines.map((line, index) => { const record = songRecords[lineKey(line)]; return <button className={`progress-line ${index === selected ? 'selected' : ''} ${record ? 'practiced' : ''}`} key={line.id} onClick={() => { selectLine(index); setPage('practice') }}><span>{line.text}</span><small>{record ? `✓ 已练习 ${record.count} 次 · ${new Date(record.at).toLocaleString()}` : '○ 未练习'}</small></button> })}
       <button className="clear-records" onClick={clearCurrentRecords} disabled={!totalPractices}>清除这首歌的练习记录</button>
-    </section>}
+    </section> : <ReportPage report={report} onClose={() => setPage('progress')} onPractice={openReportLine} onListenLine={listenReportLine} onListenWord={listenReportWord} onReadLine={readReportLine} />}
     <footer>语你合唱 · 听懂喜欢的歌，跟着伙伴练会一句外语</footer>
   </main>
 }

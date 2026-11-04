@@ -35,6 +35,8 @@ function wordsWithGroups(text) {
   return { tokens, words, groups }
 }
 
+export function normalizeWords(text) { return wordsWithGroups(String(text || '')).words }
+
 // Wagner–Fischer alignment: O(n*m) time and O(n*m) space for n/m normalized words.
 export function compareWords(expectedText, spokenText) {
   const expected = wordsWithGroups(expectedText), actual = wordsWithGroups(spokenText)
