@@ -5,6 +5,7 @@ import { compareWords, lineKey, readRecords, songKey, STORAGE_KEY } from './data
 import { chooseWords, lookupWord } from './data/vocabulary'
 import { deleteSavedSong, getSavedSong, listSavedSongs, saveSong } from './data/songLibrary'
 import { recommendLine } from './data/review'
+import { createSpeechSession } from './data/speechSession'
 
 const EMPTY_LINE = { text: '请选择对应的 .lrc 歌词文件', translation: '释义待填写', words: [], startTime: 0, endTime: 4 }
 const MicIcon = () => <svg className="mic-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="9" y="2.5" width="6" height="12" rx="3" /><path d="M5.5 10.5a6.5 6.5 0 0 0 13 0M12 17v4m-4 0h8" /></svg>
@@ -15,6 +16,7 @@ function App() {
   const [speechMessage, setSpeechMessage] = useState('点击“开始跟读”，浏览器会请求麦克风权限。')
   const [showSimulation, setShowSimulation] = useState(false)
   const [transcript, setTranscript] = useState('')
+  const [interimTranscript, setInterimTranscript] = useState('')
   const [feedback, setFeedback] = useState(null)
   const [isPlaying, setIsPlaying] = useState(false)
   const [audioNotice, setAudioNotice] = useState('')
@@ -34,7 +36,7 @@ function App() {
   const [pronunciation, setPronunciation] = useState({ word: '', status: 'idle' })
   const [savedSongs, setSavedSongs] = useState([])
   const [libraryNotice, setLibraryNotice] = useState('')
-  const recognitionRef = useRef(null)
+  const speechControllerRef = useRef(null)
   const speechSessionRef = useRef(0)
   const audioRef = useRef(null)
   const audioInputRef = useRef(null)
@@ -49,13 +51,13 @@ function App() {
   const currentSongKey = songKey(mode, audioHash, course.lines)
   const songRecords = currentSongKey ? records[currentSongKey] || {} : {}
   const currentRecord = course.lines[selected] ? songRecords[lineKey(course.lines[selected])] : null
-  const displayedFeedback = feedback || currentRecord?.feedback
+  const displayedFeedback = ['requesting', 'listening', 'processing'].includes(speechStatus) ? null : feedback || currentRecord?.feedback
   const practiced = course.lines.filter((line) => songRecords[lineKey(line)]?.count > 0).length
   const totalPractices = course.lines.reduce((sum, line) => sum + (songRecords[lineKey(line)]?.count || 0), 0)
   const recommendation = recommendLine(course.lines, songRecords)
   const progress = useMemo(() => `${practiced}/${course.lines.length} 句`, [practiced, course.lines.length])
 
-  useEffect(() => () => { recognitionRef.current?.stop(); audioRef.current?.pause() }, [])
+  useEffect(() => () => { speechControllerRef.current?.cancel(); audioRef.current?.pause() }, [])
   useEffect(() => () => { if (audioUrl) URL.revokeObjectURL(audioUrl) }, [audioUrl])
   useEffect(() => { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(records)) } catch { /* session still works */ } }, [records])
   useEffect(() => {
@@ -159,17 +161,18 @@ function App() {
     })
   }
 
-  const resetSpeech = () => { speechSessionRef.current += 1; recognitionRef.current?.stop(); recognitionRef.current = null; setSpeechStatus('idle'); setSpeechMessage('点击“开始跟读”，浏览器会请求麦克风权限。'); setTranscript(''); setFeedback(null); setShowSimulation(false) }
+  const resetSpeech = () => { speechSessionRef.current += 1; speechControllerRef.current?.cancel(); speechControllerRef.current = null; setSpeechStatus('idle'); setSpeechMessage('点击“开始跟读”，浏览器会请求麦克风权限。'); setTranscript(''); setInterimTranscript(''); setFeedback(null); setShowSimulation(false) }
 
   const startReading = async (lineIndex = selected) => {
-    if (speechStatus === 'requesting' || speechStatus === 'listening' || speechStatus === 'processing') return
     const session = ++speechSessionRef.current
     const line = course.lines[lineIndex]
     if (!line) return
+    speechControllerRef.current?.cancel(); speechControllerRef.current = null
     const lineText = line.text, sessionKey = currentSongKey
     audioRef.current?.pause(); setIsPlaying(false); segmentEndRef.current = null; window.speechSynthesis?.cancel()
     setFeedback(null)
     setTranscript('')
+    setInterimTranscript('')
     setShowSimulation(false)
     const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition
     if (!Recognition) {
@@ -193,31 +196,36 @@ function App() {
     if (session !== speechSessionRef.current) return
     const recognition = new Recognition()
     recognition.lang = 'en-US'
-    recognition.interimResults = false
+    recognition.continuous = false
+    recognition.interimResults = true
     recognition.maxAlternatives = 1
-    recognition.onresult = (event) => {
-      if (session !== speechSessionRef.current) return
-      const spoken = event.results?.[0]?.[0]?.transcript?.trim()
-      if (!spoken) { setSpeechStatus('no-speech'); setSpeechMessage('没有识别到文字。请靠近麦克风，清楚读出当前句后重试。'); return }
-      setTranscript(spoken); compare(spoken, lineText, lineIndex, sessionKey, line)
-      setSpeechStatus('success'); setSpeechMessage('已收到浏览器真实识别结果。以下仅比较文字中的单词，不评估音准或发音质量。')
-    }
-    recognition.onerror = (event) => {
-      if (session !== speechSessionRef.current) return
-      const code = event.error
-      setSpeechStatus(code === 'not-allowed' || code === 'service-not-allowed' ? 'denied' : code === 'audio-capture' ? 'no-device' : code === 'no-speech' ? 'no-speech' : 'error')
-      setSpeechMessage(code === 'not-allowed' || code === 'service-not-allowed' ? '语音识别权限被拒绝。请在地址栏允许麦克风后重试。' : code === 'audio-capture' ? '未检测到可用麦克风，请检查设备。' : code === 'no-speech' ? '没有识别到语音。请靠近麦克风并重试。' : '语音识别失败或服务不可用，请稍后重试。')
-    }
-    recognition.onend = () => { if (session === speechSessionRef.current) setSpeechStatus((status) => { if (status === 'listening' || status === 'processing') { setSpeechMessage('跟读已结束，但没有收到识别文字。请检查麦克风后重试。'); return 'no-speech' } return status }) }
-    recognitionRef.current = recognition
-    try { recognition.start(); setSpeechStatus('listening'); setSpeechMessage('麦克风已允许，正在识别英文跟读。读完后点击“结束跟读”。') }
-    catch { setSpeechStatus('error'); setSpeechMessage('语音识别无法启动，请刷新页面并重试。') }
+    const active = () => session === speechSessionRef.current
+    const controller = createSpeechSession(recognition, {
+      onListening: () => { if (active()) { setSpeechStatus('listening'); setSpeechMessage('正在识别英文跟读。读完后点击“结束跟读”。') } },
+      onWaiting: () => { if (active()) { setSpeechStatus('processing'); setSpeechMessage('正在等待浏览器返回最终识别文字。') } },
+      onInterim: (text) => { if (active()) setInterimTranscript(text) },
+      onFinal: (spoken) => {
+        if (!active()) return
+        setTranscript(spoken); setInterimTranscript(''); compare(spoken, lineText, lineIndex, sessionKey, line)
+        setSpeechStatus('success'); setSpeechMessage('已收到浏览器真实识别结果。以下仅比较文字中的单词，不评估音准或发音质量。')
+      },
+      onError: (code) => {
+        if (!active()) return
+        setInterimTranscript('')
+        const denied = code === 'not-allowed' || code === 'service-not-allowed'
+        setSpeechStatus(denied ? 'denied' : code === 'audio-capture' ? 'no-device' : code === 'no-speech' ? 'no-speech' : 'error')
+        setSpeechMessage(denied ? '语音识别权限被拒绝。请在地址栏允许麦克风后重试。' : code === 'audio-capture' ? '未检测到可用麦克风，请检查设备。' : code === 'no-speech' ? '未检测到语音。请靠近麦克风、读完一句后再结束跟读。' : code === 'no-final' ? '听到了临时识别文字，但没有收到最终结果；本次未计入练习，请重试。' : '识别服务出错或无法返回最终结果，请稍后重试。')
+      },
+    })
+    speechControllerRef.current = controller
+    setSpeechStatus('requesting'); setSpeechMessage('麦克风已允许，正在启动识别服务。')
+    try { recognition.start() }
+    catch { controller.cancel(); setSpeechStatus('error'); setSpeechMessage('语音识别无法启动，请刷新页面并重试。') }
   }
 
   const submitRecording = () => {
     if (speechStatus !== 'listening') return
-    setSpeechStatus('processing'); setSpeechMessage('已结束跟读，正在等待浏览器返回识别文字。')
-    recognitionRef.current?.stop()
+    speechControllerRef.current?.stop()
   }
 
   const selectLine = (index) => { resetSpeech(); setWordNotice(''); setSelected(index); if (mode === 'import' && audioRef.current && Number.isFinite(course.lines[index].startTime)) { audioRef.current.currentTime = course.lines[index].startTime; setProgressTime(course.lines[index].startTime); setLoopLine(true) } }
@@ -289,7 +297,8 @@ function App() {
       <aside className="practice-panel">
         <div className="panel-heading"><div><p className="label">YOUR TURN</p><h2>跟读这一句</h2></div><span className="line-count">{course.lines.length ? selected + 1 : 0} / {course.lines.length}</span></div>
         <div className="focus-line"><p>{(displayedFeedback?.parts || (currentLine.text.match(/[A-Za-z0-9]+(?:['’][A-Za-z0-9]+)?|[^A-Za-z0-9]+/g) || []).map((text) => ({ text, status: /^[A-Za-z0-9]/.test(text) ? 'unjudged' : 'punctuation' }))).map((part, index) => part.status === 'punctuation' ? <span key={index}>{part.text}</span> : <button key={index} className={`inline-word ${part.status}`} onClick={() => speakWord(part.text)} title={`听 ${part.text} 的标准朗读`}>{part.status === 'matched' ? '✓ ' : ['missing','different'].includes(part.status) ? '△ ' : part.status === 'replaced' ? '↔ ' : ''}{part.text}</button>)}</p><span>{currentLine.translation}</span><small className="inline-legend">{displayedFeedback ? '✓ 匹配　△ 疑似漏读　↔ 疑似替换' : '点击英文单词可听标准朗读'} · 识别结果可能有误</small></div>
-        <div className="record-actions"><button className={`listen-button ${speechStatus === 'listening' ? 'listening' : ''}`} onClick={startReading} disabled={!course.lines.length || ['requesting', 'listening', 'processing'].includes(speechStatus)}><MicIcon />{speechStatus === 'requesting' ? '等待麦克风权限' : speechStatus === 'listening' ? '正在识别…' : '开始跟读'}</button><button className="submit-button" onClick={submitRecording} disabled={speechStatus !== 'listening'}>结束跟读</button></div>
+        <div className="record-actions"><button className={`listen-button ${speechStatus === 'listening' ? 'listening' : ''}`} onClick={() => startReading(selected)} disabled={!currentSongKey || !course.lines.length || ['requesting', 'listening', 'processing'].includes(speechStatus)}><MicIcon />{speechStatus === 'requesting' ? '请求权限或启动中…' : speechStatus === 'listening' ? '正在识别…' : speechStatus === 'processing' ? '等待最终结果…' : '开始跟读'}</button><button className="submit-button" onClick={submitRecording} disabled={speechStatus !== 'listening'}>结束跟读</button></div>
+        {interimTranscript && ['listening', 'processing'].includes(speechStatus) && <p className="speech-status" role="status">识别中（临时文字，不计入练习）：{interimTranscript}</p>}
         <div className="detail-card"><p className="label">重点词与发音</p>{currentLine.words.length ? currentLine.words.map((item) => { const entry = dictionary[item.word]; return <div className="word-row" key={item.word}><strong>{item.word}</strong><span>{item.generated ? entry?.definition ? `英文释义：${entry.definition}` : entry?.status === 'missing' ? '词典无结果' : entry?.status === 'error' ? '词典暂不可用' : '词义待查' : item.meaning}</span><small>{entry?.phonetic || item.tip}</small><button className="pronounce-button" onClick={() => speakWord(item.word)}>{pronunciation.word === item.word && pronunciation.status === 'playing' ? '播放中…' : pronunciation.word === item.word && pronunciation.status === 'failed' ? '重试发音' : '▶ 听发音'}</button></div> }) : <p className="muted">重点词待查</p>}</div>{wordNotice && <p className="speech-status" role="status">{wordNotice}</p>}
         <p className="speech-status" role="status">{speechMessage}</p>
         <p className="privacy-note">语音识别可能由浏览器服务处理；文字比对不评估音准。</p>
