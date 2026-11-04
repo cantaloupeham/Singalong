@@ -268,7 +268,7 @@ function App() {
     <audio ref={audioRef} src={mode === 'import' ? audioUrl || undefined : '/audio/keep-moving.mp3'} preload="metadata" onTimeUpdate={handleTimeUpdate} onEnded={handleAudioEnded} onError={handleAudioError} />
 
     {page === 'practice' ? <>
-    <section className="intro"><h1>语你合唱</h1><p className="intro-copy">从一首喜欢的歌，练到一句自己的表达。</p></section>
+    <section className="intro"><h1>语你合唱</h1><p className="intro-copy">陪你从一首喜欢的歌，练到一句自己的表达。</p></section>
 
     <section className="song-picker"><div><p className="label">当前歌曲</p><h2>{course.title}</h2><p className="muted">{course.subtitle} · {course.artist}</p></div><div className="song-status"><span className="status-dot" />{mode === 'import' ? '我的歌曲 · 本地模式' : '原创演示课程'}<br /><small>{mode === 'import' ? '刷新后需要重新选择文件' : '原创音频 · 约 21 秒'}</small></div></section>
     <section className="import-panel"><div><strong>导入我的歌曲</strong><p className="muted">歌曲仅保存在此设备的浏览器中。</p>{mode === 'import' && <p className="muted">音频：{audioName || '未选择'} · 歌词：{lrcName || '未选择'}</p>}</div><div className="import-actions"><button className="secondary-button" onClick={() => audioInputRef.current?.click()}>选择音频</button><button className="secondary-button" onClick={() => lrcInputRef.current?.click()} disabled={!audioUrl}>选择 .lrc</button><button className="text-button" onClick={resetImport}>返回演示课程</button><input ref={audioInputRef} type="file" accept=".mp3,.wav,.m4a,audio/mpeg,audio/wav,audio/mp4" onChange={chooseAudio} hidden /><input ref={lrcInputRef} type="file" accept=".lrc,text/plain" onChange={chooseLrc} hidden /></div>{importError && <p className="import-error" role="alert">{importError}</p>}{libraryNotice && <p className="muted" role="status">{libraryNotice}</p>}</section>
