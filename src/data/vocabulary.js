@@ -35,7 +35,9 @@ export async function lookupWord(word) {
       const entries = await response.json()
       const entry = entries?.[0]
       const phonetics = entry?.phonetics || []
-      return { status: 'ok', phonetic: entry?.phonetic || phonetics.find((item) => item.text)?.text || '', audio: phonetics.find((item) => item.audio?.startsWith('https://'))?.audio || '', definition: entry?.meanings?.[0]?.definitions?.[0]?.definition || '' }
+      const definitions = entry?.meanings?.flatMap((meaning) => meaning.definitions || []) || []
+      const selected = definitions.find((definition) => definition.definition && definition.example) || definitions.find((definition) => definition.definition)
+      return { status: 'ok', phonetic: entry?.phonetic || phonetics.find((item) => item.text)?.text || '', audio: phonetics.find((item) => item.audio?.startsWith('https://'))?.audio || '', definition: selected?.definition || '', example: selected?.example || '' }
     } catch { return { status: 'error' } }
   })()
   cache.set(exact, request)

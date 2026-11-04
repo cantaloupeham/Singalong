@@ -9,6 +9,8 @@ import { createSpeechSession } from './data/speechSession'
 import MicrophoneCheck from './MicrophoneCheck'
 import ReportPage from './ReportPage'
 import { buildLearningReport } from './data/report'
+import { getUsageContent } from './data/usage'
+import UsageCard from './UsageCard'
 
 const EMPTY_LINE = { text: '请选择对应的 .lrc 歌词文件', translation: '释义待填写', words: [], startTime: 0, endTime: 4 }
 const MicIcon = () => <svg className="mic-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="9" y="2.5" width="6" height="12" rx="3" /><path d="M5.5 10.5a6.5 6.5 0 0 0 13 0M12 17v4m-4 0h8" /></svg>
@@ -22,6 +24,8 @@ function App() {
   const [transcript, setTranscript] = useState('')
   const [interimTranscript, setInterimTranscript] = useState('')
   const [feedback, setFeedback] = useState(null)
+  const [usageOpen, setUsageOpen] = useState(false)
+  const [usageDrafts, setUsageDrafts] = useState({})
   const [isPlaying, setIsPlaying] = useState(false)
   const [audioNotice, setAudioNotice] = useState('')
   const [progressTime, setProgressTime] = useState(0)
@@ -53,6 +57,8 @@ function App() {
   const course = mode === 'import' ? (importedSong || { title: audioName || '我的歌曲', subtitle: '请选择同步歌词', artist: '本地文件', lines: [] }) : song
   const currentLine = course.lines[selected] || EMPTY_LINE
   const currentSongKey = songKey(mode, audioHash, course.lines)
+  const usageContent = getUsageContent(mode, currentLine, dictionary)
+  const usageDraftKey = `${currentSongKey || mode}:${lineKey(currentLine)}`
   const songRecords = currentSongKey ? records[currentSongKey] || {} : {}
   const currentRecord = course.lines[selected] ? songRecords[lineKey(course.lines[selected])] : null
   const displayedFeedback = ['requesting', 'listening', 'processing'].includes(speechStatus) ? null : feedback || currentRecord?.feedback
@@ -305,8 +311,9 @@ function App() {
 
       <aside className="practice-panel">
         <div className="panel-heading"><div><p className="label">YOUR TURN</p><h2>跟读这一句</h2></div><span className="line-count">{course.lines.length ? selected + 1 : 0} / {course.lines.length}</span></div>
-        <div className="focus-line"><p>{(displayedFeedback?.parts || (currentLine.text.match(/[A-Za-z0-9]+(?:['’][A-Za-z0-9]+)?|[^A-Za-z0-9]+/g) || []).map((text) => ({ text, status: /^[A-Za-z0-9]/.test(text) ? 'unjudged' : 'punctuation' }))).map((part, index) => part.status === 'punctuation' ? <span key={index}>{part.text}</span> : <button key={index} className={`inline-word ${part.status}`} onClick={() => speakWord(part.text)} title={`听 ${part.text} 的标准朗读`}>{part.status === 'matched' ? '✓ ' : ['missing','different'].includes(part.status) ? '△ ' : part.status === 'replaced' ? '↔ ' : ''}{part.text}</button>)}</p><span>{currentLine.translation}</span><small className="inline-legend">{displayedFeedback ? '✓ 匹配　△ 疑似漏读　↔ 疑似替换' : '点击英文单词可听标准朗读'} · 识别结果可能有误</small></div>
+        <div className="focus-line"><p>{(displayedFeedback?.parts || (currentLine.text.match(/[A-Za-z0-9]+(?:['’][A-Za-z0-9]+)?|[^A-Za-z0-9]+/g) || []).map((text) => ({ text, status: /^[A-Za-z0-9]/.test(text) ? 'unjudged' : 'punctuation' }))).map((part, index) => part.status === 'punctuation' ? <span key={index}>{part.text}</span> : <button key={index} className={`inline-word ${part.status}`} onClick={() => speakWord(part.text)} title={`听 ${part.text} 的标准朗读`}>{part.status === 'matched' ? '✓ ' : ['missing','different'].includes(part.status) ? '△ ' : part.status === 'replaced' ? '↔ ' : ''}{part.text}</button>)}</p><span>{currentLine.translation}</span><small className="inline-legend">{displayedFeedback ? '✓ 匹配　△ 疑似漏读　↔ 疑似替换' : '点击英文单词可听标准朗读'} · 识别结果可能有误</small><button className="usage-open" onClick={() => setUsageOpen((open) => !open)} disabled={!course.lines.length}>{usageOpen ? '收起用法' : '这句怎么用'}</button></div>
         <div className="record-actions"><button className={`listen-button ${speechStatus === 'listening' ? 'listening' : ''}`} onClick={() => startReading(selected)} disabled={!currentSongKey || !course.lines.length || ['requesting', 'listening', 'processing'].includes(speechStatus)}><MicIcon />{speechStatus === 'requesting' ? '请求权限或启动中…' : speechStatus === 'listening' ? '正在识别…' : speechStatus === 'processing' ? '等待最终结果…' : '开始跟读'}</button><button className="submit-button" onClick={submitRecording} disabled={speechStatus !== 'listening'}>结束跟读</button></div>
+        {usageOpen && course.lines.length > 0 && <UsageCard content={usageContent} draft={usageDrafts[usageDraftKey] || ''} onDraftChange={(value) => setUsageDrafts((previous) => ({ ...previous, [usageDraftKey]: value }))} onClose={() => setUsageOpen(false)} />}
         {interimTranscript && ['listening', 'processing'].includes(speechStatus) && <p className="speech-status" role="status">识别中（临时文字，不计入练习）：{interimTranscript}</p>}
         <div className="detail-card"><p className="label">重点词与发音</p>{currentLine.words.length ? currentLine.words.map((item) => { const entry = dictionary[item.word]; return <div className="word-row" key={item.word}><strong>{item.word}</strong><span>{item.generated ? entry?.definition ? `英文释义：${entry.definition}` : entry?.status === 'missing' ? '词典无结果' : entry?.status === 'error' ? '词典暂不可用' : '词义待查' : item.meaning}</span><small>{entry?.phonetic || item.tip}</small><button className="pronounce-button" onClick={() => speakWord(item.word)}>{pronunciation.word === item.word && pronunciation.status === 'playing' ? '播放中…' : pronunciation.word === item.word && pronunciation.status === 'failed' ? '重试发音' : '▶ 听发音'}</button></div> }) : <p className="muted">重点词待查</p>}</div>{wordNotice && <p className="speech-status" role="status">{wordNotice}</p>}
         {!showPermissionToast && <p className="speech-status" role="status">{speechMessage}</p>}
