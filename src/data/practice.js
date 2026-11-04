@@ -21,24 +21,42 @@ export function readRecords() {
   } catch { return {} }
 }
 
-// LCS keeps word order and treats repeated words as separate occurrences.
+const CONTRACTIONS = { "don't": 'do not', "doesn't": 'does not', "didn't": 'did not', "can't": 'can not', cannot: 'can not', "won't": 'will not', "i'm": 'i am', "you're": 'you are', "we're": 'we are', "they're": 'they are', "it's": 'it is', "that's": 'that is', "i've": 'i have', "we've": 'we have', "i'll": 'i will', "you'll": 'you will' }
+const wordPattern = /[A-Za-z0-9]+(?:['’][A-Za-z0-9]+)?|[^A-Za-z0-9]+/g
+
+function wordsWithGroups(text) {
+  const tokens = text.match(wordPattern) || [], words = [], groups = []
+  tokens.forEach((token, tokenIndex) => {
+    if (!/^[A-Za-z0-9]/.test(token)) return
+    const normalized = token.toLowerCase().replace(/’/g, "'")
+    const expanded = (CONTRACTIONS[normalized] || normalized).split(' ')
+    for (const word of expanded) { words.push(word); groups.push(tokenIndex) }
+  })
+  return { tokens, words, groups }
+}
+
+// Wagner–Fischer alignment: O(n*m) time and O(n*m) space for n/m normalized words.
 export function compareWords(expectedText, spokenText) {
-  const tokens = expectedText.match(/[A-Za-z]+|[^A-Za-z]+/g) || []
-  const expected = tokens.filter((part) => /^[A-Za-z]+$/.test(part)).map((part) => part.toLowerCase())
-  const actual = (spokenText.match(/[A-Za-z]+/g) || []).map((part) => part.toLowerCase())
-  const dp = Array.from({ length: expected.length + 1 }, () => Array(actual.length + 1).fill(0))
-  for (let i = expected.length - 1; i >= 0; i--) for (let j = actual.length - 1; j >= 0; j--)
-    dp[i][j] = expected[i] === actual[j] ? 1 + dp[i + 1][j + 1] : Math.max(dp[i + 1][j], dp[i][j + 1])
-  const matched = new Set(), used = new Set()
-  let i = 0, j = 0
-  while (i < expected.length && j < actual.length) {
-    if (expected[i] === actual[j]) { matched.add(i); used.add(j); i++; j++ }
-    else if (dp[i + 1][j] >= dp[i][j + 1]) i++
-    else j++
+  const expected = wordsWithGroups(expectedText), actual = wordsWithGroups(spokenText)
+  const n = expected.words.length, m = actual.words.length
+  const dp = Array.from({ length: n + 1 }, () => Array(m + 1).fill(0))
+  for (let i = 0; i <= n; i++) dp[i][0] = i
+  for (let j = 0; j <= m; j++) dp[0][j] = j
+  for (let i = 1; i <= n; i++) for (let j = 1; j <= m; j++)
+    dp[i][j] = Math.min(dp[i-1][j-1] + (expected.words[i-1] === actual.words[j-1] ? 0 : 1), dp[i-1][j] + 1, dp[i][j-1] + 1)
+  const statuses = Array(n).fill('missing'), replacements = [], unexpected = []
+  let i = n, j = m
+  while (i || j) {
+    if (i && j && expected.words[i-1] === actual.words[j-1] && dp[i][j] === dp[i-1][j-1]) { statuses[--i] = 'matched'; j--; continue }
+    if (i && j && dp[i][j] === dp[i-1][j-1] + 1) { statuses[--i] = 'replaced'; replacements.unshift({ expected: expected.words[i], actual: actual.words[--j] }); continue }
+    if (i && dp[i][j] === dp[i-1][j] + 1) { i--; continue }
+    unexpected.unshift(actual.words[--j])
   }
-  let wordIndex = 0
-  const parts = tokens.map((token) => /^[A-Za-z]+$/.test(token)
-    ? { text: token, status: matched.has(wordIndex++) ? 'matched' : 'different' }
-    : { text: token, status: 'punctuation' })
-  return { parts, missing: expected.filter((_, index) => !matched.has(index)), unexpected: actual.filter((_, index) => !used.has(index)) }
+  const byToken = new Map()
+  statuses.forEach((status, index) => {
+    const group = expected.groups[index], old = byToken.get(group)
+    byToken.set(group, status === 'matched' ? old || 'matched' : status === 'replaced' ? 'replaced' : old === 'replaced' ? old : 'missing')
+  })
+  const parts = expected.tokens.map((text, index) => ({ text, status: /^[A-Za-z0-9]/.test(text) ? byToken.get(index) : 'punctuation' }))
+  return { parts, missing: expected.words.filter((_, index) => statuses[index] === 'missing'), replacements, unexpected }
 }
