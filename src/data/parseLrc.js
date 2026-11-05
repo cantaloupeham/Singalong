@@ -5,7 +5,7 @@ export function parseLrc(source) {
     const stamps = [...row.matchAll(/\[(\d{1,3}):([0-5]\d)(?:[.:](\d{1,3}))?\]/g)]
     if (!stamps.length) continue
     const text = row.replace(/\[\d{1,3}:[0-5]\d(?:[.:]\d{1,3})?\]/g, '').trim()
-    if (!text || /^\[/.test(text)) continue
+    if (!text || /^\[/.test(text) || !/\p{L}/u.test(text)) continue
     for (const stamp of stamps) {
       const fraction = stamp[3] ? Number(stamp[3]) / 10 ** stamp[3].length : 0
       cues.push({ startTime: Number(stamp[1]) * 60 + Number(stamp[2]) + fraction, text })
