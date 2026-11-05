@@ -1,5 +1,6 @@
 export const song = {
   id: 'keep-moving',
+  language: 'english',
   title: 'Take a Breath',
   subtitle: '一首写给练习路上的原创短歌',
   artist: '语你合唱原创',

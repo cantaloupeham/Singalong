@@ -7,21 +7,22 @@ function detailedAttempts(record) {
   return record.feedback && typeof record.feedback === 'object' ? [{ at: record.at, feedback: record.feedback }] : []
 }
 
-function issueWords(feedback) {
+function issueWords(feedback, language = 'english') {
+  const normalize = language === 'japanese' ? (value) => value ? [String(value).normalize('NFKC').toLocaleLowerCase('ja-JP')] : [] : normalizeWords
   const expected = new Set()
   const unexpected = new Set()
   for (const word of Array.isArray(feedback?.missing) ? feedback.missing : [])
-    for (const normalized of normalizeWords(word)) expected.add(normalized)
+    for (const normalized of normalize(word)) expected.add(normalized)
   for (const item of Array.isArray(feedback?.replacements) ? feedback.replacements : [])
-    for (const normalized of normalizeWords(item?.expected)) expected.add(normalized)
+    for (const normalized of normalize(item?.expected)) expected.add(normalized)
   for (const word of Array.isArray(feedback?.unexpected) ? feedback.unexpected : [])
-    for (const normalized of normalizeWords(word)) unexpected.add(normalized)
+    for (const normalized of normalize(word)) unexpected.add(normalized)
   return { expected, unexpected }
 }
 
-function countOccurrences(attempts, kind) {
+function countOccurrences(attempts, kind, language) {
   const counts = new Map()
-  for (const attempt of attempts) for (const word of issueWords(attempt.feedback)[kind])
+  for (const attempt of attempts) for (const word of issueWords(attempt.feedback, language)[kind])
     counts.set(word, (counts.get(word) || 0) + 1)
   return [...counts].map(([word, count]) => ({ word, count }))
     .sort((a, b) => b.count - a.count || (a.word < b.word ? -1 : a.word > b.word ? 1 : 0))
@@ -32,7 +33,7 @@ function practiceAge(at, now) {
   return Number.isFinite(timestamp) ? Math.max(0, Math.floor((now - timestamp) / 86400000)) : 0
 }
 
-export function buildLearningReport(title, lines, songRecords, now = Date.now()) {
+export function buildLearningReport(title, lines, songRecords, now = Date.now(), language = 'english') {
   const practiced = [], unpracticed = [], repeatedWords = [], unexpectedWords = [], observations = []
   let totalAttempts = 0, lastAt = null, lastTimestamp = -Infinity
 
@@ -44,15 +45,15 @@ export function buildLearningReport(title, lines, songRecords, now = Date.now())
     const timestamp = Date.parse(record.at)
     if (Number.isFinite(timestamp) && timestamp > lastTimestamp) { lastTimestamp = timestamp; lastAt = record.at }
     const attempts = detailedAttempts(record)
-    const expectedCounts = countOccurrences(attempts, 'expected')
-    const extraCounts = countOccurrences(attempts, 'unexpected')
+    const expectedCounts = countOccurrences(attempts, 'expected', language)
+    const extraCounts = countOccurrences(attempts, 'unexpected', language)
     for (const item of expectedCounts.filter((item) => item.count >= 2))
       repeatedWords.push({ ...item, index, text: line.text, sampleCount: attempts.length })
     for (const item of extraCounts)
       unexpectedWords.push({ ...item, index, text: line.text, sampleCount: attempts.length })
 
-    const firstIssues = attempts.length ? issueWords(attempts[0].feedback) : null
-    const latestIssues = attempts.length ? issueWords(attempts.at(-1).feedback) : { expected: new Set(), unexpected: new Set() }
+    const firstIssues = attempts.length ? issueWords(attempts[0].feedback, language) : null
+    const latestIssues = attempts.length ? issueWords(attempts.at(-1).feedback, language) : { expected: new Set(), unexpected: new Set() }
     const firstDifferenceCount = firstIssues?.expected.size ?? null
     const latestDifferenceCount = latestIssues.expected.size
     observations.push({ index, text: line.text, sampleCount: attempts.length, firstDifferenceCount,
@@ -65,12 +66,12 @@ export function buildLearningReport(title, lines, songRecords, now = Date.now())
     const score = repeatHits * 5 + (latestHasDifference ? 4 : 0) + Math.min(ageDays, 30) / 5
     const repeated = expectedCounts.find((item) => item.count >= 2)
     const facts = [
-      attempts.length ? repeated ? `“${repeated.word}”在最近 ${attempts.length} 次中有 ${repeated.count} 次疑似未识别` : `最近 ${attempts.length} 次无反复出现的标准词差异` : '只有跟读次数，没有可分析的详细反馈',
-      attempts.length ? latestHasDifference ? `最近一次有 ${latestIssues.expected.size} 个标准词差异、${latestIssues.unexpected.size} 个疑似多出词` : '最近一次文字比对一致' : '最近一次文字差异未知',
+      attempts.length ? repeated ? `“${repeated.word}”在最近 ${attempts.length} 次中有 ${repeated.count} 次疑似转写差异` : `最近 ${attempts.length} 次无反复出现的${language === 'japanese' ? '转写片段' : '标准词'}差异` : '只有跟读次数，没有可分析的详细反馈',
+      attempts.length ? latestHasDifference ? `最近一次有 ${latestIssues.expected.size} 个${language === 'japanese' ? '转写片段' : '标准词'}差异、${latestIssues.unexpected.size} 个疑似多出${language === 'japanese' ? '片段' : '词'}` : '最近一次文字比对一致' : '最近一次文字差异未知',
       `距上次练习 ${ageDays} 天`,
     ]
     const focusWord = repeated?.word || [...latestIssues.expected][0] || null
-    const practiceWord = focusWord || line.words?.[0]?.word || normalizeWords(line.text)[0] || null
+    const practiceWord = language === 'japanese' ? null : focusWord || line.words?.[0]?.word || normalizeWords(line.text)[0] || null
     practiced.push({ index, text: line.text, score, facts, sampleCount: attempts.length, ageDays, focusWord, practiceWord })
   })
 
@@ -78,7 +79,7 @@ export function buildLearningReport(title, lines, songRecords, now = Date.now())
   unexpectedWords.sort((a, b) => b.count - a.count || a.index - b.index || (a.word < b.word ? -1 : 1))
   practiced.sort((a, b) => b.score - a.score || a.index - b.index)
   return {
-    title, totalLines: lines.length, practicedLines: practiced.length, totalAttempts, lastAt,
+    title, language, totalLines: lines.length, practicedLines: practiced.length, totalAttempts, lastAt,
     hasRecords: practiced.length > 0, repeatedWords, unexpectedWords,
     topReview: practiced.slice(0, 3), unpracticed, observations,
   }

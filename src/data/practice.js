@@ -6,10 +6,12 @@ export function textHash(value) {
   return (hash >>> 0).toString(16)
 }
 
-export function songKey(mode, audioHash, lines) {
+export function songKey(mode, audioHash, lines, language = 'english') {
   if (mode === 'import' && !audioHash) return null
   const signature = lines.map(({ text, startTime, endTime }) => [text, startTime, endTime])
-  return `${mode}:${audioHash || 'original'}:${textHash(JSON.stringify(signature))}`
+  const base = `${mode}:${audioHash || 'original'}:${textHash(JSON.stringify(signature))}`
+  // Keep legacy English keys readable; a Japanese choice has its own records.
+  return language === 'japanese' ? `${base}:ja-JP` : base
 }
 
 export function lineKey(line) { return `${line.id}:${line.startTime}:${line.text}` }
@@ -37,23 +39,28 @@ function wordsWithGroups(text) {
 
 export function normalizeWords(text) { return wordsWithGroups(String(text || '')).words }
 
-// Wagner–Fischer alignment: O(n*m) time and O(n*m) space for n/m normalized words.
-export function compareWords(expectedText, spokenText) {
-  const expected = wordsWithGroups(expectedText), actual = wordsWithGroups(spokenText)
-  const n = expected.words.length, m = actual.words.length
+// Wagner–Fischer alignment: O(n*m) time and O(n*m) space for n/m tokens.
+export function alignSequences(expectedWords, actualWords) {
+  const n = expectedWords.length, m = actualWords.length
   const dp = Array.from({ length: n + 1 }, () => Array(m + 1).fill(0))
   for (let i = 0; i <= n; i++) dp[i][0] = i
   for (let j = 0; j <= m; j++) dp[0][j] = j
   for (let i = 1; i <= n; i++) for (let j = 1; j <= m; j++)
-    dp[i][j] = Math.min(dp[i-1][j-1] + (expected.words[i-1] === actual.words[j-1] ? 0 : 1), dp[i-1][j] + 1, dp[i][j-1] + 1)
-  const statuses = Array(n).fill('missing'), replacements = [], unexpected = []
+    dp[i][j] = Math.min(dp[i-1][j-1] + (expectedWords[i-1] === actualWords[j-1] ? 0 : 1), dp[i-1][j] + 1, dp[i][j-1] + 1)
+  const statuses = Array(n).fill('missing'), replacements = [], unexpected = [], replacementLocations = [], unexpectedLocations = []
   let i = n, j = m
   while (i || j) {
-    if (i && j && expected.words[i-1] === actual.words[j-1] && dp[i][j] === dp[i-1][j-1]) { statuses[--i] = 'matched'; j--; continue }
-    if (i && j && dp[i][j] === dp[i-1][j-1] + 1) { statuses[--i] = 'replaced'; replacements.unshift({ expected: expected.words[i], actual: actual.words[--j] }); continue }
+    if (i && j && expectedWords[i-1] === actualWords[j-1] && dp[i][j] === dp[i-1][j-1]) { statuses[--i] = 'matched'; j--; continue }
+    if (i && j && dp[i][j] === dp[i-1][j-1] + 1) { statuses[--i] = 'replaced'; --j; replacements.unshift({ expected: expectedWords[i], actual: actualWords[j] }); replacementLocations.unshift({ expectedIndex: i, actualIndex: j }); continue }
     if (i && dp[i][j] === dp[i-1][j] + 1) { i--; continue }
-    unexpected.unshift(actual.words[--j])
+    unexpected.unshift(actualWords[--j]); unexpectedLocations.unshift(j)
   }
+  return { statuses, replacements, unexpected, replacementLocations, unexpectedLocations }
+}
+
+export function compareWords(expectedText, spokenText) {
+  const expected = wordsWithGroups(expectedText), actual = wordsWithGroups(spokenText)
+  const { statuses, replacements, unexpected } = alignSequences(expected.words, actual.words)
   const byToken = new Map()
   statuses.forEach((status, index) => {
     const group = expected.groups[index], old = byToken.get(group)
