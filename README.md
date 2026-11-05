@@ -9,7 +9,7 @@ npm install
 npm run dev
 ```
 
-`npm run dev` 只启动 Vite 页面，不运行 Netlify 函数；要在本机联调日语自动释义，请使用 Netlify CLI 的 `netlify dev` 并在仅本机可见的服务端环境配置密钥。不要将密钥写进前端或提交到 Git。
+`npm run dev` 只启动 Vite 页面，不运行 Netlify 函数；要在本机联调日语自动释义，请使用 Netlify CLI 的 `netlify dev`。用户在网页中自行填写 OpenAI API Key，站点没有共享密钥。不要将密钥写进代码或提交到 Git。
 
 应用包含一首原创英文短歌《Take a Breath》（四句、20.88 秒），不需要 API Key。支持 Speech Recognition 的浏览器会在获得麦克风权限后识别英文跟读，并对识别文字进行词序列动态规划比对。浏览器的识别服务可能在云端处理音频；应用本身不保存录音。缺少识别能力、权限或设备时会显示原因，并提供明确标注的模拟反馈示例；示例不作为识别结果或学习成绩。
 
@@ -34,8 +34,8 @@ npm test
 
 ## 公共 HTTPS 演示（Netlify）
 
-本项目由 Netlify 构建 Vite 页面及 `netlify/functions/japanese-study.mjs` 服务端函数。Netlify 连接 GitHub 仓库 `cantaloupeham/yuni-chorus` 的 `work` 分支，运行 `npm run build` 并发布 `dist/`。体验网址为 https://yuni-chorus.netlify.app/。英语演示与日语跟读无需 API Key；**日语自动释义需要在 Netlify 的环境变量中配置 `OPENAI_API_KEY`（Functions 可用），并重新部署**。密钥不得使用 `VITE_` 前缀。建议为公开演示使用单独的受限项目密钥并设置消费上限。
+本项目由 Netlify 构建 Vite 页面及 `netlify/functions/japanese-study.mjs` 服务端函数。Netlify 连接 GitHub 仓库 `cantaloupeham/yuni-chorus` 的 `work` 分支，运行 `npm run build` 并发布 `dist/`。体验网址为 https://yuni-chorus.netlify.app/。英语演示与日语跟读无需 API Key；日语自动释义由用户自行选择是否接入自己的 OpenAI API Key。密钥只保留在当前页面内存，生成时经同站 Netlify 函数转发给 OpenAI，刷新或断开后清除；网站不提供共享额度。API 使用可能产生用户账户费用，建议用户在服务商侧设置消费上限。
 
 若更名后 Netlify 的仓库连接未自动跟随，请在站点配置中重新连接 `cantaloupeham/yuni-chorus`，保持生产分支 `work`、构建命令 `npm run build`、发布目录 `dist`。
 
-演示版音频为用户提供的原创歌曲；“导入我的歌曲”可以选择本地 MP3、WAV 或 M4A 和对应 LRC 文件，在浏览器内播放和同步歌词，**音频文件不会上传**。用户点击日语自动释义后，浏览器仅把待处理的单句歌词发给本站 Netlify 函数，函数再将该句发送给模型服务；不发送音频、整首歌词或语音识别文本。未配置密钥、服务出错时显示明确提示，不生成占位翻译。请勿将商业歌曲或 API Key 提交到仓库。
+演示版音频为用户提供的原创歌曲；“导入我的歌曲”可以选择本地 MP3、WAV 或 M4A 和对应 LRC 文件，在浏览器内播放和同步歌词，**音频文件不会上传**。用户点击日语自动释义后，浏览器仅把待处理的单句歌词和用户临时提供的密钥发给本站 Netlify 函数，函数再将该句发送给 OpenAI；不发送音频、整首歌词或语音识别文本。密钥无效、额度用尽或服务出错时显示明确提示，不生成占位翻译。请勿将商业歌曲或 API Key 提交到仓库。

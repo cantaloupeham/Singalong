@@ -24,8 +24,10 @@ export async function handler(event) {
   try { input = JSON.parse(event.body || '{}') } catch { return json(400, { error: 'invalid_json' }) }
   const line = typeof input.line === 'string' ? input.line.trim() : ''
   if (!line || line.length > 300 || !/\p{L}/u.test(line)) return json(400, { error: 'invalid_line' })
-  const apiKey = process.env.OPENAI_API_KEY
-  if (!apiKey) return json(503, { error: 'service_unavailable' })
+  // Bring-your-own key. Never persist or log this header; the site owner has no shared key.
+  const apiKey = event.headers?.['x-user-api-key'] || event.headers?.['X-User-Api-Key']
+  if (typeof apiKey !== 'string' || apiKey.length < 10 || apiKey.length > 300 || /[\r\n]/.test(apiKey))
+    return json(401, { error: 'api_key_required' })
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 20000)
   try {
@@ -41,6 +43,8 @@ export async function handler(event) {
         ],
       }),
     })
+    if (response.status === 401 || response.status === 403) return json(401, { error: 'invalid_api_key' })
+    if (response.status === 429) return json(429, { error: 'rate_limited' })
     if (!response.ok) return json(502, { error: 'translation_service_failed' })
     const payload = await response.json()
     const content = payload?.choices?.[0]?.message?.content

@@ -53,6 +53,10 @@ function App() {
   const [narrationNotice, setNarrationNotice] = useState('')
   const [narrationTarget, setNarrationTarget] = useState('')
   const [studyGeneration, setStudyGeneration] = useState({ status: 'idle', done: 0, total: 0, message: '' })
+  const [apiKey, setApiKey] = useState('')
+  const [apiDraft, setApiDraft] = useState('')
+  const [apiPanelOpen, setApiPanelOpen] = useState(false)
+  const [apiNotice, setApiNotice] = useState('')
   const [savedSongs, setSavedSongs] = useState([])
   const [libraryNotice, setLibraryNotice] = useState('')
   const speechControllerRef = useRef(null)
@@ -146,6 +150,7 @@ function App() {
 
   const generateJapaneseStudy = async () => {
     if (mode !== 'import' || currentLanguage !== 'japanese' || !importedSong || studyGeneration.status === 'running') return
+    if (!apiKey) { setApiPanelOpen(true); setStudyGeneration({ status: 'idle', done: 0, total: 0, message: '请先连接自己的 OpenAI API，再生成释义。' }); return }
     const remaining = importedSong.lines.filter((line) => line.translationSource !== 'ai')
     if (!remaining.length) { setStudyGeneration({ status: 'done', done: 0, total: 0, message: '这首歌的歌词已生成释义。' }); return }
     const batch = remaining.slice(0, 20), controller = new AbortController()
@@ -155,7 +160,7 @@ function App() {
     let done = 0
     try {
       for (const line of batch) {
-        const result = await generateJapaneseLine(line.text, controller.signal)
+        const result = await generateJapaneseLine(line.text, apiKey, controller.signal)
         if (id !== studyJobRef.current.id) return
         setImportedSong((previous) => previous && previous.language === 'japanese' ? { ...previous,
           lines: previous.lines.map((item) => item.id === line.id && item.text === line.text ? {
@@ -171,6 +176,15 @@ function App() {
       if (error.name !== 'AbortError' && id === studyJobRef.current.id)
         setStudyGeneration({ status: 'error', done, total: batch.length, message: error.message })
     } finally { if (id === studyJobRef.current.id) studyJobRef.current.controller = null }
+  }
+
+  const connectApi = () => {
+    const value = apiDraft.trim()
+    if (value.length < 10 || value.length > 300 || /[\r\n]/.test(value)) { setApiNotice('请填写有效的 OpenAI API Key；首次生成时会验证是否可用。'); return }
+    setApiKey(value); setApiDraft(''); setApiPanelOpen(false); setApiNotice('API Key 已在当前页面填写；首次生成时会验证，刷新后需重新填写。')
+  }
+  const disconnectApi = () => {
+    cancelStudyGeneration(); setApiKey(''); setApiDraft(''); setApiPanelOpen(false); setApiNotice('已断开 API Key。')
   }
 
   const stopJapaneseNarration = () => {
@@ -409,7 +423,7 @@ function App() {
     <section className="intro"><h1>语你合唱</h1><p className="intro-copy">陪你从一首喜欢的歌，练到一句自己的表达。</p></section>
 
     <section className="song-picker"><div><p className="label">当前歌曲 · {currentLanguage === 'japanese' ? '日本語' : 'English'}</p><h2>{course.title}</h2><p className="muted">{course.subtitle} · {course.artist}</p></div><div className="song-status"><span className="status-dot" />{mode === 'import' ? '我的歌曲 · 本地模式' : '原创英语演示课程'}<br /><small>{mode === 'import' ? '已保存在此设备的浏览器中' : '原创音频 · 约 21 秒'}</small></div></section>
-    <section className="import-panel"><div><strong>导入我的歌曲</strong><p className="muted">英语和日语歌词可跟读；其他语言可导入试听。</p>{mode === 'import' && <p className="muted">音频：{audioName || '未选择'} · 歌词：{lrcName || '未选择'}</p>}</div><div className="import-actions"><label className="import-language">歌词语言 <select aria-label="歌词语言" value={importLanguage} onChange={(event) => changeImportLanguage(event.target.value)}><option value="english">English</option><option value="japanese">日本語</option></select></label><button className="secondary-button" onClick={() => audioInputRef.current?.click()}>选择音频</button><button className="secondary-button" onClick={() => lrcInputRef.current?.click()} disabled={!audioUrl}>选择 .lrc</button>{mode === 'import' && currentLanguage === 'japanese' && course.lines.length > 0 && <button className="primary-button" onClick={generateJapaneseStudy} disabled={studyGeneration.status === 'running'}>{studyGeneration.status === 'running' ? '正在生成…' : '生成日语释义与词语讲解'}</button>}<button className="text-button" onClick={resetImport}>返回演示课程</button><input ref={audioInputRef} type="file" accept=".mp3,.wav,.m4a,audio/mpeg,audio/wav,audio/mp4" onChange={chooseAudio} hidden /><input ref={lrcInputRef} type="file" accept=".lrc,text/plain" onChange={chooseLrc} hidden /></div>{importError && <p className="import-error" role="alert">{importError}</p>}{libraryNotice && <p className="muted" role="status">{libraryNotice}</p>}{mode === 'import' && currentLanguage === 'japanese' && course.lines.length > 0 && <p className="study-generation" role="status">{studyGeneration.message || '点击生成时，仅逐句发送歌词文字；音频留在本机。自动生成的内容请核对。'}</p>}</section>
+    <section className="import-panel"><div><strong>导入我的歌曲</strong><p className="muted">英语和日语歌词可跟读；其他语言可导入试听。</p>{mode === 'import' && <p className="muted">音频：{audioName || '未选择'} · 歌词：{lrcName || '未选择'}</p>}</div><div className="import-actions"><label className="import-language">歌词语言 <select aria-label="歌词语言" value={importLanguage} onChange={(event) => changeImportLanguage(event.target.value)}><option value="english">English</option><option value="japanese">日本語</option></select></label><button className="secondary-button" onClick={() => audioInputRef.current?.click()}>选择音频</button><button className="secondary-button" onClick={() => lrcInputRef.current?.click()} disabled={!audioUrl}>选择 .lrc</button><button className="secondary-button" onClick={() => setApiPanelOpen((open) => !open)}>{apiKey ? 'API Key 已填写 · 管理' : '连接我的 OpenAI API'}</button>{mode === 'import' && currentLanguage === 'japanese' && course.lines.length > 0 && <button className="primary-button" onClick={generateJapaneseStudy} disabled={studyGeneration.status === 'running'}>{studyGeneration.status === 'running' ? '正在生成…' : '生成日语释义与词语讲解'}</button>}<button className="text-button" onClick={resetImport}>返回演示课程</button><input ref={audioInputRef} type="file" accept=".mp3,.wav,.m4a,audio/mpeg,audio/wav,audio/mp4" onChange={chooseAudio} hidden /><input ref={lrcInputRef} type="file" accept=".lrc,text/plain" onChange={chooseLrc} hidden /></div>{importError && <p className="import-error" role="alert">{importError}</p>}{libraryNotice && <p className="muted" role="status">{libraryNotice}</p>}{mode === 'import' && currentLanguage === 'japanese' && course.lines.length > 0 && <p className="study-generation" role="status">{studyGeneration.message || (apiKey ? '点击生成时，仅逐句发送歌词文字；音频留在本机。自动生成的内容请核对。' : '可连接自己的 OpenAI API 生成释义；听歌与跟读无需密钥。')}</p>}{apiPanelOpen && <div className="api-panel" role="region" aria-label="连接我的 OpenAI API"><strong>连接我的 OpenAI API</strong><p>密钥只保留在当前页面内存。点击生成时，本站 Netlify 函数会把当前歌词句和密钥转发给 OpenAI；音频不上传。OpenAI API 可能收费，刷新后需重新填写。</p><label>OpenAI API Key <input type="password" autoComplete="off" spellCheck="false" value={apiDraft} onChange={(event) => setApiDraft(event.target.value)} placeholder="粘贴你的 API Key" /></label><div className="api-actions"><button className="primary-button" onClick={connectApi}>在当前页面使用</button>{apiKey && <button className="secondary-button" onClick={disconnectApi}>断开连接</button>}<button className="secondary-button" onClick={() => { setApiDraft(''); setApiPanelOpen(false) }}>关闭</button></div><small>需要你自己的 OpenAI API 账户与可用额度；不要在共享设备填写密钥。</small></div>}{apiNotice && <p className="study-generation" role="status">{apiNotice}</p>}</section>
 
     <section className="workspace">
       <div className="lyrics-panel">

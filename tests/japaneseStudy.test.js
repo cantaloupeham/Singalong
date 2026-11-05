@@ -14,42 +14,42 @@ test('study result keeps a faithful line translation and rejects invented vocabu
   assert.equal(validateStudyContent({ translation: '', words: [] }, '今日も進もう'), null)
 })
 
-test('server accepts only one lyric line and fails clearly without a server key', async () => {
-  const oldKey = process.env.OPENAI_API_KEY
-  delete process.env.OPENAI_API_KEY
-  try {
-    const event = { httpMethod: 'POST', headers: { host: 'example.netlify.app', origin: 'https://example.netlify.app' }, body: JSON.stringify({ line: '今日も進もう' }) }
-    assert.equal((await handler(event)).statusCode, 503)
-    assert.equal((await handler({ ...event, body: JSON.stringify({ line: '' }) })).statusCode, 400)
-    assert.equal((await handler({ ...event, httpMethod: 'GET' })).statusCode, 405)
-    assert.equal((await handler({ ...event, headers: { host: 'example.netlify.app', origin: 'https://other.example' } })).statusCode, 403)
-    assert.equal((await handler({ ...event, body: 'x'.repeat(2001) })).statusCode, 413)
-  } finally { if (oldKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = oldKey }
+test('server accepts one lyric line and requires a user-provided key', async () => {
+  const event = { httpMethod: 'POST', headers: { host: 'example.netlify.app', origin: 'https://example.netlify.app' }, body: JSON.stringify({ line: '今日も進もう' }) }
+  assert.equal((await handler(event)).statusCode, 401)
+  assert.equal((await handler({ ...event, body: JSON.stringify({ line: '' }) })).statusCode, 400)
+  assert.equal((await handler({ ...event, httpMethod: 'GET' })).statusCode, 405)
+  assert.equal((await handler({ ...event, headers: { host: 'example.netlify.app', origin: 'https://other.example' } })).statusCode, 403)
+  assert.equal((await handler({ ...event, body: 'x'.repeat(2001) })).statusCode, 413)
 })
 
 test('server sends only the current line to the model and validates its reply', async () => {
-  const oldKey = process.env.OPENAI_API_KEY, oldFetch = globalThis.fetch
-  process.env.OPENAI_API_KEY = 'test-only'
+  const oldFetch = globalThis.fetch
   let request
   globalThis.fetch = async (_url, options) => {
     request = JSON.parse(options.body)
     return { ok: true, json: async () => ({ choices: [{ message: { content: JSON.stringify({ translation: '今天也前进。', words: [{ word: '今日', reading: 'きょう', meaning: '今天', note: '时间词' }] }) } }] }) }
   }
   try {
-    const reply = await handler({ httpMethod: 'POST', headers: {}, body: JSON.stringify({ line: '今日も進もう' }) })
+    const reply = await handler({ httpMethod: 'POST', headers: { 'x-user-api-key': 'test-only-key' }, body: JSON.stringify({ line: '今日も進もう' }) })
     assert.equal(reply.statusCode, 200)
     assert.equal(JSON.parse(reply.body).words[0].word, '今日')
     assert.deepEqual(JSON.parse(request.messages[1].content), { line: '今日も進もう' })
     assert.ok(!request.messages[1].content.includes('audio'))
-  } finally { globalThis.fetch = oldFetch; if (oldKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = oldKey }
+  } finally { globalThis.fetch = oldFetch }
 })
 
-test('client distinguishes unavailable service from successful generated content', async () => {
+test('client sends the key only in the request header and reports invalid credentials', async () => {
   const oldFetch = globalThis.fetch
   try {
     globalThis.fetch = async () => ({ ok: false, status: 503 })
-    await assert.rejects(generateJapaneseLine('今日も進もう'), /尚未启用/)
-    globalThis.fetch = async () => ({ ok: true, json: async () => ({ translation: '今天也前进。', words: [] }) })
-    assert.equal((await generateJapaneseLine('今日も進もう')).translation, '今天也前进。')
+    await assert.rejects(generateJapaneseLine('今日も進もう', 'test-only-key'), /暂时失败/)
+    globalThis.fetch = async () => ({ ok: false, status: 401 })
+    await assert.rejects(generateJapaneseLine('今日も進もう', 'test-only-key'), /API Key 无效/)
+    let options
+    globalThis.fetch = async (_url, request) => { options = request; return { ok: true, json: async () => ({ translation: '今天也前进。', words: [] }) } }
+    assert.equal((await generateJapaneseLine('今日も進もう', 'test-only-key')).translation, '今天也前进。')
+    assert.equal(options.headers['X-User-Api-Key'], 'test-only-key')
+    assert.equal(options.body.includes('test-only-key'), false)
   } finally { globalThis.fetch = oldFetch }
 })
