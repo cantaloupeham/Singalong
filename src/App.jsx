@@ -14,6 +14,7 @@ import UsageCard from './UsageCard'
 import { classifyLyrics } from './data/lyricLanguage'
 import { compareJapanese, japaneseSegments } from './data/japaneseAlignment'
 import { findJapaneseVoice } from './data/japaneseSpeech'
+import { generateJapaneseLine } from './data/japaneseStudy'
 
 const EMPTY_LINE = { text: '请选择对应的 .lrc 歌词文件', translation: '释义待填写', words: [], startTime: 0, endTime: 4 }
 const MicIcon = () => <svg className="mic-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="9" y="2.5" width="6" height="12" rx="3" /><path d="M5.5 10.5a6.5 6.5 0 0 0 13 0M12 17v4m-4 0h8" /></svg>
@@ -50,6 +51,8 @@ function App() {
   const [voiceChecked, setVoiceChecked] = useState(false)
   const [narrationStatus, setNarrationStatus] = useState('idle')
   const [narrationNotice, setNarrationNotice] = useState('')
+  const [narrationTarget, setNarrationTarget] = useState('')
+  const [studyGeneration, setStudyGeneration] = useState({ status: 'idle', done: 0, total: 0, message: '' })
   const [savedSongs, setSavedSongs] = useState([])
   const [libraryNotice, setLibraryNotice] = useState('')
   const speechControllerRef = useRef(null)
@@ -62,6 +65,7 @@ function App() {
   const wordAudioRef = useRef(null)
   const pronunciationSessionRef = useRef(0)
   const narrationSessionRef = useRef(0)
+  const studyJobRef = useRef({ id: 0, controller: null })
   const audioBlobRef = useRef(null)
   const course = mode === 'import' ? (importedSong || { title: audioName || '我的歌曲', subtitle: '请选择同步歌词', artist: '本地文件', lines: [] }) : song
   const currentLine = course.lines[selected] || EMPTY_LINE
@@ -128,29 +132,71 @@ function App() {
     const timer = window.setTimeout(() => { if (active) setVoiceChecked(true) }, 3000)
     return () => { active = false; window.clearTimeout(timer); synthesis.removeEventListener?.('voiceschanged', refresh) }
   }, [currentLanguage])
+  useEffect(() => {
+    setStudyGeneration({ status: 'idle', done: 0, total: 0, message: '' })
+    return () => { studyJobRef.current.id += 1; studyJobRef.current.controller?.abort() }
+  }, [currentSongKey, currentLanguage])
+
+  const cancelStudyGeneration = () => {
+    studyJobRef.current.id += 1
+    studyJobRef.current.controller?.abort()
+    studyJobRef.current.controller = null
+    setStudyGeneration({ status: 'idle', done: 0, total: 0, message: '' })
+  }
+
+  const generateJapaneseStudy = async () => {
+    if (mode !== 'import' || currentLanguage !== 'japanese' || !importedSong || studyGeneration.status === 'running') return
+    const remaining = importedSong.lines.filter((line) => line.translationSource !== 'ai')
+    if (!remaining.length) { setStudyGeneration({ status: 'done', done: 0, total: 0, message: '这首歌的歌词已生成释义。' }); return }
+    const batch = remaining.slice(0, 20), controller = new AbortController()
+    const id = ++studyJobRef.current.id
+    studyJobRef.current.controller = controller
+    setStudyGeneration({ status: 'running', done: 0, total: batch.length, message: '正在逐句生成释义与词语讲解…' })
+    let done = 0
+    try {
+      for (const line of batch) {
+        const result = await generateJapaneseLine(line.text, controller.signal)
+        if (id !== studyJobRef.current.id) return
+        setImportedSong((previous) => previous && previous.language === 'japanese' ? { ...previous,
+          lines: previous.lines.map((item) => item.id === line.id && item.text === line.text ? {
+            ...item, translation: result.translation, translationSource: 'ai', words: result.words,
+          } : item),
+        } : previous)
+        done += 1
+        setStudyGeneration({ status: 'running', done, total: batch.length, message: `已生成 ${done}/${batch.length} 句…` })
+      }
+      const left = remaining.length - done
+      setStudyGeneration({ status: 'done', done, total: batch.length, message: left ? `已生成 ${done} 句，还有 ${left} 句；再次点击可继续。` : `已生成 ${done} 句，请核对释义。` })
+    } catch (error) {
+      if (error.name !== 'AbortError' && id === studyJobRef.current.id)
+        setStudyGeneration({ status: 'error', done, total: batch.length, message: error.message })
+    } finally { if (id === studyJobRef.current.id) studyJobRef.current.controller = null }
+  }
 
   const stopJapaneseNarration = () => {
     narrationSessionRef.current += 1
     window.speechSynthesis?.cancel()
     setNarrationStatus('idle')
     setNarrationNotice('')
+    setNarrationTarget('')
   }
 
-  const speakJapaneseLine = () => {
+  const speakJapaneseText = (text, target = 'line') => {
     if (currentLanguage !== 'japanese' || !course.lines.length) return
     resetSpeech(); audioRef.current?.pause(); setIsPlaying(false); segmentEndRef.current = null
     wordAudioRef.current?.pause(); stopJapaneseNarration()
     const voice = findJapaneseVoice(window.speechSynthesis?.getVoices()) || japaneseVoice
     if (!voice || !window.SpeechSynthesisUtterance) { setNarrationStatus('unavailable'); setNarrationNotice('此设备暂没有可用的日语朗读声音'); return }
     const session = narrationSessionRef.current
-    const utterance = new SpeechSynthesisUtterance(currentLine.text)
+    const utterance = new SpeechSynthesisUtterance(text)
     utterance.lang = 'ja-JP'; utterance.voice = voice
     utterance.onstart = () => { if (session === narrationSessionRef.current) setNarrationStatus('playing') }
     utterance.onend = () => { if (session === narrationSessionRef.current) setNarrationStatus('idle') }
     utterance.onerror = () => { if (session === narrationSessionRef.current) { setNarrationStatus('failed'); setNarrationNotice('日语示范朗读失败，请检查设备语音后重试。') } }
-    try { setNarrationStatus('starting'); setNarrationNotice('浏览器示范朗读，不是歌曲原唱。'); window.speechSynthesis.speak(utterance) }
+    try { setNarrationTarget(target); setNarrationStatus('starting'); setNarrationNotice('浏览器示范朗读，不是歌曲原唱。'); window.speechSynthesis.speak(utterance) }
     catch { setNarrationStatus('failed'); setNarrationNotice('日语示范朗读失败，请检查设备语音后重试。') }
   }
+  const speakJapaneseLine = () => speakJapaneseText(currentLine.text)
 
   const handleTimeUpdate = () => {
     const time = audioRef.current?.currentTime || 0
@@ -304,7 +350,7 @@ function App() {
     if (!/\.(mp3|wav|m4a)$/i.test(file.name)) { setImportError('文件格式不支持，请选择 MP3、WAV 或 M4A。'); return }
     const importSession = ++importSessionRef.current
     audioBlobRef.current = file
-    stopJapaneseNarration(); resetSpeech(); audioRef.current?.pause(); setIsPlaying(false); setAudioUrl(URL.createObjectURL(file)); setAudioName(file.name); setAudioHash(''); setMode('import'); setImportedSong(null); setLrcName(''); setSelected(0); setLoopLine(false); setImportError(''); setAudioNotice('已选择本地音频，正在建立本地内容标识；请再选择 .lrc 歌词。')
+    cancelStudyGeneration(); stopJapaneseNarration(); resetSpeech(); audioRef.current?.pause(); setIsPlaying(false); setAudioUrl(URL.createObjectURL(file)); setAudioName(file.name); setAudioHash(''); setMode('import'); setImportedSong(null); setLrcName(''); setSelected(0); setLoopLine(false); setImportError(''); setAudioNotice('已选择本地音频，正在建立本地内容标识；请再选择 .lrc 歌词。')
     try { const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer()); if (importSession === importSessionRef.current) setAudioHash(Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')) }
     catch { if (importSession === importSessionRef.current) setImportError('无法建立音频内容标识，请在 HTTPS 页面或 localhost 重试。') }
   }
@@ -316,20 +362,20 @@ function App() {
       if (!content.trim()) { setImportError('歌词文件为空，请选择包含时间戳的 .lrc 文件。'); return }
       const lines = parseLrc(content).map((line) => ({ ...line, translation: '释义待填写', words: importLanguage === 'english' ? chooseWords(line.text) : [] }))
       if (!lines.length) { setImportError('未找到有效的时间戳歌词，例如 [00:04.00] Every small step counts today'); return }
-      stopJapaneseNarration(); resetSpeech(); setImportedSong({ title: audioName.replace(/\.[^.]+$/, ''), artist: '我的本地歌曲', subtitle: '本地 LRC 歌词', language: importLanguage, lines }); setLrcName(file.name); setSelected(0); setLoopLine(false); setImportError(''); setAudioNotice('LRC 歌词已加载，可以开始播放。')
+      cancelStudyGeneration(); stopJapaneseNarration(); resetSpeech(); setImportedSong({ title: audioName.replace(/\.[^.]+$/, ''), artist: '我的本地歌曲', subtitle: '本地 LRC 歌词', language: importLanguage, lines }); setLrcName(file.name); setSelected(0); setLoopLine(false); setImportError(''); setAudioNotice('LRC 歌词已加载，可以开始播放。')
     } catch { setImportError('歌词文件读取失败，请重新选择 .lrc 文件。') }
   }
   const changeImportLanguage = (language) => {
-    stopJapaneseNarration(); resetSpeech(); setUsageOpen(false); setImportLanguage(language); setPage('practice')
+    cancelStudyGeneration(); stopJapaneseNarration(); resetSpeech(); setUsageOpen(false); setImportLanguage(language); setPage('practice')
     setImportedSong((previous) => previous ? { ...previous, language,
       lines: previous.lines.map((line) => ({ ...line, words: language === 'english' ? chooseWords(line.text) : [] })) } : previous)
   }
-  const resetImport = () => { importSessionRef.current += 1; audioBlobRef.current = null; localStorage.removeItem('yuni-chorus-last-song'); stopJapaneseNarration(); resetSpeech(); audioRef.current?.pause(); setIsPlaying(false); setAudioUrl(''); setAudioName(''); setAudioHash(''); setLrcName(''); setImportedSong(null); setImportLanguage('english'); setMode('demo'); setImportError(''); setSelected(0); setLoopLine(false); setAudioNotice('') }
+  const resetImport = () => { importSessionRef.current += 1; audioBlobRef.current = null; localStorage.removeItem('yuni-chorus-last-song'); cancelStudyGeneration(); stopJapaneseNarration(); resetSpeech(); audioRef.current?.pause(); setIsPlaying(false); setAudioUrl(''); setAudioName(''); setAudioHash(''); setLrcName(''); setImportedSong(null); setImportLanguage('english'); setMode('demo'); setImportError(''); setSelected(0); setLoopLine(false); setAudioNotice('') }
   const openSavedSong = async (key) => {
     try {
       const entry = await getSavedSong(key)
       if (!entry?.blob?.size || !Array.isArray(entry.lines) || !entry.lines.length) { setLibraryNotice('保存的歌曲文件已损坏，请删除并重新导入。'); return }
-      importSessionRef.current += 1; stopJapaneseNarration(); resetSpeech(); audioRef.current?.pause(); setIsPlaying(false)
+      importSessionRef.current += 1; cancelStudyGeneration(); stopJapaneseNarration(); resetSpeech(); audioRef.current?.pause(); setIsPlaying(false)
       audioBlobRef.current = entry.blob; setAudioUrl(URL.createObjectURL(entry.blob)); setAudioHash(entry.audioHash)
       setAudioName(entry.audioName); setLrcName(entry.lrcName); setImportLanguage(entry.language || 'english'); setImportedSong({ title: entry.name, artist: '我的本地歌曲', subtitle: '本地 LRC 歌词', language: entry.language || 'english', lines: entry.lines })
       setMode('import'); setSelected(0); setPage('practice'); setImportError(''); setLibraryNotice('已从此设备恢复歌曲。')
@@ -363,7 +409,7 @@ function App() {
     <section className="intro"><h1>语你合唱</h1><p className="intro-copy">陪你从一首喜欢的歌，练到一句自己的表达。</p></section>
 
     <section className="song-picker"><div><p className="label">当前歌曲 · {currentLanguage === 'japanese' ? '日本語' : 'English'}</p><h2>{course.title}</h2><p className="muted">{course.subtitle} · {course.artist}</p></div><div className="song-status"><span className="status-dot" />{mode === 'import' ? '我的歌曲 · 本地模式' : '原创英语演示课程'}<br /><small>{mode === 'import' ? '已保存在此设备的浏览器中' : '原创音频 · 约 21 秒'}</small></div></section>
-    <section className="import-panel"><div><strong>导入我的歌曲</strong><p className="muted">英语和日语歌词可跟读；其他语言可导入试听。</p>{mode === 'import' && <p className="muted">音频：{audioName || '未选择'} · 歌词：{lrcName || '未选择'}</p>}</div><div className="import-actions"><label className="import-language">歌词语言 <select aria-label="歌词语言" value={importLanguage} onChange={(event) => changeImportLanguage(event.target.value)}><option value="english">English</option><option value="japanese">日本語</option></select></label><button className="secondary-button" onClick={() => audioInputRef.current?.click()}>选择音频</button><button className="secondary-button" onClick={() => lrcInputRef.current?.click()} disabled={!audioUrl}>选择 .lrc</button><button className="text-button" onClick={resetImport}>返回演示课程</button><input ref={audioInputRef} type="file" accept=".mp3,.wav,.m4a,audio/mpeg,audio/wav,audio/mp4" onChange={chooseAudio} hidden /><input ref={lrcInputRef} type="file" accept=".lrc,text/plain" onChange={chooseLrc} hidden /></div>{importError && <p className="import-error" role="alert">{importError}</p>}{libraryNotice && <p className="muted" role="status">{libraryNotice}</p>}</section>
+    <section className="import-panel"><div><strong>导入我的歌曲</strong><p className="muted">英语和日语歌词可跟读；其他语言可导入试听。</p>{mode === 'import' && <p className="muted">音频：{audioName || '未选择'} · 歌词：{lrcName || '未选择'}</p>}</div><div className="import-actions"><label className="import-language">歌词语言 <select aria-label="歌词语言" value={importLanguage} onChange={(event) => changeImportLanguage(event.target.value)}><option value="english">English</option><option value="japanese">日本語</option></select></label><button className="secondary-button" onClick={() => audioInputRef.current?.click()}>选择音频</button><button className="secondary-button" onClick={() => lrcInputRef.current?.click()} disabled={!audioUrl}>选择 .lrc</button>{mode === 'import' && currentLanguage === 'japanese' && course.lines.length > 0 && <button className="primary-button" onClick={generateJapaneseStudy} disabled={studyGeneration.status === 'running'}>{studyGeneration.status === 'running' ? '正在生成…' : '生成日语释义与词语讲解'}</button>}<button className="text-button" onClick={resetImport}>返回演示课程</button><input ref={audioInputRef} type="file" accept=".mp3,.wav,.m4a,audio/mpeg,audio/wav,audio/mp4" onChange={chooseAudio} hidden /><input ref={lrcInputRef} type="file" accept=".lrc,text/plain" onChange={chooseLrc} hidden /></div>{importError && <p className="import-error" role="alert">{importError}</p>}{libraryNotice && <p className="muted" role="status">{libraryNotice}</p>}{mode === 'import' && currentLanguage === 'japanese' && course.lines.length > 0 && <p className="study-generation" role="status">{studyGeneration.message || '点击生成时，仅逐句发送歌词文字；音频留在本机。自动生成的内容请核对。'}</p>}</section>
 
     <section className="workspace">
       <div className="lyrics-panel">
@@ -375,14 +421,15 @@ function App() {
 
       <aside className="practice-panel">
         <div className="panel-heading"><div><p className="label">YOUR TURN</p><h2>跟读这一句</h2></div><span className="line-count">{course.lines.length ? selected + 1 : 0} / {course.lines.length}</span></div>
-        <div className="focus-line"><p>{(displayedFeedback?.parts || plainParts).map((part, index) => part.status === 'punctuation' ? <span key={index}>{part.text}</span> : currentLanguage === 'japanese' ? <span key={index} className={`inline-word ${part.status}`}>{part.status === 'matched' ? '✓ ' : part.status === 'missing' ? '△ ' : part.status === 'replaced' ? '↔ ' : part.status === 'uncertain' ? '◇ ' : ''}{part.text}</span> : <button key={index} className={`inline-word ${part.status}`} onClick={() => speakWord(part.text)} title={`听 ${part.text} 的标准朗读`}>{part.status === 'matched' ? '✓ ' : part.status === 'missing' ? '△ ' : part.status === 'replaced' ? '↔ ' : ''}{part.text}</button>)}</p><span>{currentLine.translation}</span><small className="inline-legend">{currentLanguage === 'japanese' ? displayedFeedback ? '✓ 文字匹配　△ 疑似缺少　↔ 疑似不同　◇ 写法待确认' : '日语词语讲解尚未提供' : displayedFeedback ? '✓ 匹配　△ 疑似漏读　↔ 疑似替换' : '点击英文单词可听标准朗读'} · 识别结果可能有误</small>{englishPracticeEnabled && <button className="usage-open" onClick={() => setUsageOpen((open) => !open)} disabled={!course.lines.length}>{usageOpen ? '收起用法' : '这句怎么用'}</button>}</div>
-        {currentLanguage === 'japanese' && course.lines.length > 0 && !languageMismatch && <div className="narration-control">{japaneseVoice ? <button className="secondary-button" onClick={speakJapaneseLine}>{narrationStatus === 'playing' || narrationStatus === 'starting' ? '重新听示范朗读' : '▶ 听示范朗读'}</button> : <p role="status">{voiceChecked ? '此设备暂没有可用的日语朗读声音' : '正在查找日语朗读声音…'}</p>}<small>浏览器示范朗读，不是歌曲原唱。</small>{narrationStatus === 'failed' && <p role="alert">{narrationNotice}</p>}</div>}
+        <div className="focus-line"><p>{(displayedFeedback?.parts || plainParts).map((part, index) => part.status === 'punctuation' ? <span key={index}>{part.text}</span> : currentLanguage === 'japanese' ? <span key={index} className={`inline-word ${part.status}`}>{part.status === 'matched' ? '✓ ' : part.status === 'missing' ? '△ ' : part.status === 'replaced' ? '↔ ' : part.status === 'uncertain' ? '◇ ' : ''}{part.text}</span> : <button key={index} className={`inline-word ${part.status}`} onClick={() => speakWord(part.text)} title={`听 ${part.text} 的标准朗读`}>{part.status === 'matched' ? '✓ ' : part.status === 'missing' ? '△ ' : part.status === 'replaced' ? '↔ ' : ''}{part.text}</button>)}</p><span>{currentLine.translation}</span>{currentLanguage === 'japanese' && currentLine.translationSource === 'ai' && <small className="study-source">自动生成，请核对</small>}<small className="inline-legend">{currentLanguage === 'japanese' ? displayedFeedback ? '✓ 文字匹配　△ 疑似缺少　↔ 疑似不同　◇ 写法待确认' : currentLine.translationSource === 'ai' ? '释义由自动生成，请核对' : '释义待生成' : displayedFeedback ? '✓ 匹配　△ 疑似漏读　↔ 疑似替换' : '点击英文单词可听标准朗读'} · 识别结果可能有误</small>{englishPracticeEnabled && <button className="usage-open" onClick={() => setUsageOpen((open) => !open)} disabled={!course.lines.length}>{usageOpen ? '收起用法' : '这句怎么用'}</button>}</div>
+        {currentLanguage === 'japanese' && course.lines.length > 0 && !languageMismatch && <div className="narration-control">{japaneseVoice ? <button className="secondary-button" onClick={speakJapaneseLine}>{narrationTarget === 'line' && (narrationStatus === 'playing' || narrationStatus === 'starting') ? '重新听示范朗读' : '▶ 听示范朗读'}</button> : <p role="status">{voiceChecked ? '此设备暂没有可用的日语朗读声音' : '正在查找日语朗读声音…'}</p>}<small>浏览器示范朗读，不是歌曲原唱。</small>{narrationStatus === 'failed' && <p role="alert">{narrationNotice}</p>}</div>}
         {languageMismatch && <div className="language-scope" role="status">歌词文字看起来可能与所选语言不同。请在上方修改“歌词语言”后再跟读；现在仍可试听。</div>}
-        {currentLanguage === 'japanese' && <div className="language-scope">日语反馈仅比较转写文字；汉字、假名写法可能不同，不判断发音、音高或重音。日语词语讲解尚未提供。</div>}
+        {currentLanguage === 'japanese' && <div className="language-scope">日语反馈仅比较转写文字；汉字、假名写法可能不同，不判断发音、音高或重音。{currentLine.words.length ? '词语讲解由自动生成，请核对。' : currentLine.translationSource === 'ai' ? '这句暂无可可靠挑选的重点词。' : '词语讲解尚未生成。'}</div>}
         {practiceEnabled && <div className="record-actions"><button className={`listen-button ${speechStatus === 'listening' ? 'listening' : ''}`} onClick={() => startReading(selected)} disabled={!currentSongKey || ['requesting', 'listening', 'processing'].includes(speechStatus)}><MicIcon />{speechStatus === 'requesting' ? '请求权限或启动中…' : speechStatus === 'listening' ? '正在识别…' : speechStatus === 'processing' ? '等待最终结果…' : '开始跟读'}</button><button className="submit-button" onClick={submitRecording} disabled={speechStatus !== 'listening'}>结束跟读</button></div>}
         {usageOpen && englishPracticeEnabled && course.lines.length > 0 && <UsageCard content={usageContent} draft={usageDrafts[usageDraftKey] || ''} onDraftChange={(value) => setUsageDrafts((previous) => ({ ...previous, [usageDraftKey]: value }))} onClose={() => setUsageOpen(false)} />}
         {interimTranscript && ['listening', 'processing'].includes(speechStatus) && <p className="speech-status" role="status">识别中（临时文字，不计入练习）：{interimTranscript}</p>}
         {englishPracticeEnabled && <div className="detail-card"><p className="label">重点词与发音</p>{currentLine.words.length ? currentLine.words.map((item) => { const entry = dictionary[item.word]; return <div className="word-row" key={item.word}><strong>{item.word}</strong><span>{item.generated ? entry?.definition ? `英文释义：${entry.definition}` : entry?.status === 'missing' ? '词典无结果' : entry?.status === 'error' ? '词典暂不可用' : '词义待查' : item.meaning}</span><small>{entry?.phonetic || item.tip}</small><button className="pronounce-button" onClick={() => speakWord(item.word)}>{pronunciation.word === item.word && pronunciation.status === 'playing' ? '播放中…' : pronunciation.word === item.word && pronunciation.status === 'failed' ? '重试发音' : '▶ 听发音'}</button></div> }) : <p className="muted">重点词待查</p>}</div>}{englishPracticeEnabled && wordNotice && <p className="speech-status" role="status">{wordNotice}</p>}
+        {currentLanguage === 'japanese' && <div className="detail-card japanese-words"><p className="label">日语词语讲解 · 自动生成，请核对</p>{currentLine.words.length ? currentLine.words.map((item, index) => <div className="word-row" key={`${item.word}-${index}`}><strong>{item.word}</strong><span>{item.meaning}</span><small>{item.reading ? `读法：${item.reading}` : '读法待核对'}{item.note ? ` · ${item.note}` : ''}</small>{japaneseVoice && <button className="pronounce-button" onClick={() => speakJapaneseText(item.word, item.word)}>{narrationTarget === item.word && ['starting', 'playing'].includes(narrationStatus) ? '重新听朗读' : '▶ 听词语朗读'}</button>}</div>) : <p className="muted">{currentLine.translationSource === 'ai' ? '这句暂无可可靠挑选的重点词。' : '暂无词语讲解；生成后会显示在这里。'}</p>}</div>}
         {practiceEnabled && !showPermissionToast && <p className="speech-status" role="status">{speechMessage}</p>}
         {['no-speech', 'no-device', 'error'].includes(speechStatus) && <MicrophoneCheck />}
         <p className="privacy-note">语音识别可能由浏览器服务处理；文字比对不评估音准。</p>
