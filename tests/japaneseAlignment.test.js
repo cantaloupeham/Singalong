@@ -1,8 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { compareJapanese, japaneseSegments } from '../src/data/japaneseAlignment.js'
+import { compareJapanese, japaneseCompareKey, japaneseSegments } from '../src/data/japaneseAlignment.js'
 import { compareWords, songKey } from '../src/data/practice.js'
 import { buildLearningReport } from '../src/data/report.js'
+import { findJapaneseVoice } from '../src/data/japaneseSpeech.js'
 
 test('Japanese segmentation preserves source offsets, punctuation and spacing', () => {
   const source = '今日、  また　歩こう！'
@@ -24,6 +25,38 @@ test('kanji and kana variants are cautious transcription differences', () => {
   assert.ok(result.missing.length + result.replacements.length + result.unexpected.length > 0)
   assert.equal(result.parts.map((part) => part.text).join(''), '今日も行こう')
   assert.ok(result.parts.some((part) => part.status === 'matched'))
+  assert.equal(result.kanjiKanaUncertain, true)
+  assert.ok(result.parts.some((part) => part.status === 'uncertain'))
+  assert.equal(compareJapanese('私', 'わたし').kanjiKanaUncertain, true)
+})
+
+test('hiragana, full-width and half-width katakana compare equally', () => {
+  for (const [original, recognized] of [
+    ['カタカナ', 'かたかな'], ['コンニチハ', 'こんにちは'], ['ﾃｽﾄ', 'テスト'],
+    ['ガッコウ', 'がっこう'], ['ﾊﾟﾝ', 'ぱん'], ['キャー', 'きゃー'], ['ヴァイオリン', 'ゔぁいおりん'],
+  ]) {
+    const result = compareJapanese(original, recognized)
+    assert.deepEqual(result.missing, [], original)
+    assert.deepEqual(result.replacements, [], original)
+    assert.deepEqual(result.unexpected, [], original)
+    assert.equal(result.parts.map((part) => part.text).join(''), original)
+    assert.equal(japaneseCompareKey(original), japaneseCompareKey(recognized))
+  }
+})
+
+test('punctuation stays in the original display and does not merge neighboring lyrics', () => {
+  const original = 'テスト、テスト！'
+  const result = compareJapanese(original, 'てすと、てすと')
+  assert.equal(result.parts.map((part) => part.text).join(''), original)
+  assert.ok(result.parts.filter((part) => part.status === 'matched').length >= 2)
+  assert.ok(result.parts.some((part) => part.text === '、' && part.status === 'punctuation'))
+})
+
+test('Japanese voice selection excludes English and prefers ja-JP', () => {
+  const en = { lang: 'en-US' }, ja = { lang: 'ja' }, japan = { lang: 'ja-JP' }
+  assert.equal(findJapaneseVoice([en]), null)
+  assert.equal(findJapaneseVoice([en, ja]), ja)
+  assert.equal(findJapaneseVoice([ja, japan]), japan)
 })
 
 test('full-width Latin characters normalize while Japanese punctuation stays visible', () => {
